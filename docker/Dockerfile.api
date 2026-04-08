@@ -1,0 +1,67 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# DROPWATCH API Dockerfile
+# Node.js API server for the purchasing agent
+# ═══════════════════════════════════════════════════════════════════════════════
+
+FROM node:20-alpine AS base
+
+# Install dependencies for native modules
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    curl
+
+WORKDIR /app
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dependencies stage
+# ─────────────────────────────────────────────────────────────────────────────
+FROM base AS deps
+
+COPY package*.json ./
+RUN npm ci --only=production && npm cache clean --force
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Build stage
+# ─────────────────────────────────────────────────────────────────────────────
+FROM base AS builder
+
+COPY package*.json ./
+RUN npm ci
+
+COPY . .
+RUN npm run build
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Production stage
+# ─────────────────────────────────────────────────────────────────────────────
+FROM node:20-alpine AS runner
+
+RUN apk add --no-cache curl
+
+# Create non-root user
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 dropwatch
+
+WORKDIR /app
+
+# Copy built assets
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/package.json ./
+
+# Set permissions
+RUN chown -R dropwatch:nodejs /app
+
+USER dropwatch
+
+# Expose port
+EXPOSE 3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:3000/health || exit 1
+
+# Start
+CMD ["node", "dist/server.js"]

@@ -1,0 +1,213 @@
+version: '3.8'
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DROPWATCH - Docker Compose Deployment
+# Collector Station Automated Purchasing Agent
+# ═══════════════════════════════════════════════════════════════════════════════
+
+services:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # API Server
+  # ─────────────────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: dropwatch-api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${DB_USER:-dropwatch}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-dropwatch}
+      - REDIS_URL=redis://redis:6379
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - dropwatch-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Worker (Browser Automation)
+  # ─────────────────────────────────────────────────────────────────────────────
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    container_name: dropwatch-worker
+    restart: unless-stopped
+    deploy:
+      replicas: ${WORKER_REPLICAS:-2}
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${DB_USER:-dropwatch}:${DB_PASSWORD}@postgres:5432/${DB_NAME:-dropwatch}
+      - REDIS_URL=redis://redis:6379
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - BROWSER_POOL_SIZE=${BROWSER_POOL_SIZE:-3}
+      - MAX_CONCURRENCY=${MAX_CONCURRENCY:-3}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - browser-data:/home/node/.cache
+      - ./screenshots:/app/screenshots
+    networks:
+      - dropwatch-net
+    # Required for Playwright
+    shm_size: '2gb'
+    security_opt:
+      - seccomp:unconfined
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Web UI (React Dashboard)
+  # ─────────────────────────────────────────────────────────────────────────────
+  ui:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ui
+    container_name: dropwatch-ui
+    restart: unless-stopped
+    ports:
+      - "${UI_PORT:-80}:80"
+      - "${UI_SSL_PORT:-443}:443"
+    environment:
+      - REACT_APP_API_URL=${API_URL:-http://localhost:3000}
+    depends_on:
+      - api
+    networks:
+      - dropwatch-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # PostgreSQL Database
+  # ─────────────────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: dropwatch-postgres
+    restart: unless-stopped
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    environment:
+      - POSTGRES_USER=${DB_USER:-dropwatch}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${DB_NAME:-dropwatch}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    networks:
+      - dropwatch-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-dropwatch} -d ${DB_NAME:-dropwatch}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Redis (Queue & Cache)
+  # ─────────────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: dropwatch-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    networks:
+      - dropwatch-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Prometheus (Metrics)
+  # ─────────────────────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: dropwatch-prometheus
+    restart: unless-stopped
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+    networks:
+      - dropwatch-net
+    profiles:
+      - monitoring
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Grafana (Dashboards)
+  # ─────────────────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: dropwatch-grafana
+    restart: unless-stopped
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - dropwatch-net
+    profiles:
+      - monitoring
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NETWORKS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+networks:
+  dropwatch-net:
+    driver: bridge
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VOLUMES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+  browser-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
