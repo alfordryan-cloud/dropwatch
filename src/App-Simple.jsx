@@ -1,85 +1,112 @@
 import React, { useState, useEffect } from 'react';
+import { supabase } from './supabaseClient';
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// DROPWATCH - SIMPLIFIED DASHBOARD
-// Clean interface focused on products and results
+// DROPWATCH - DASHBOARD WITH SUPABASE
+// Clean interface with real database connection
 // ═══════════════════════════════════════════════════════════════════════════════
-
-// Mock data
-const mockProducts = [
-  { 
-    id: 1, 
-    name: 'Surging Sparks Elite Trainer Box', 
-    image: '⚡',
-    category: 'Pokemon',
-    msrp: 49.99,
-    status: 'active',
-    purchased: { today: 4, week: 18, month: 47, total: 47 },
-    retailers: ['Target', 'Walmart', 'Pokemon Center'],
-    lastPurchase: Date.now() - 3600000,
-    successRate: 0.78
-  },
-  { 
-    id: 2, 
-    name: 'Prismatic Evolutions Booster Bundle', 
-    image: '✨',
-    category: 'Pokemon',
-    msrp: 39.99,
-    status: 'active',
-    purchased: { today: 2, week: 12, month: 31, total: 31 },
-    retailers: ['Target', 'Best Buy'],
-    lastPurchase: Date.now() - 7200000,
-    successRate: 0.65
-  },
-  { 
-    id: 3, 
-    name: 'Topps Series 2 Hobby Box', 
-    image: '⚾',
-    category: 'Sports',
-    msrp: 89.99,
-    status: 'active',
-    purchased: { today: 1, week: 5, month: 12, total: 12 },
-    retailers: ['Target', 'Walmart'],
-    lastPurchase: Date.now() - 14400000,
-    successRate: 0.82
-  },
-  { 
-    id: 4, 
-    name: 'Panini Prizm Basketball Blaster', 
-    image: '🏀',
-    category: 'Sports',
-    msrp: 29.99,
-    status: 'watching',
-    purchased: { today: 0, week: 0, month: 0, total: 0 },
-    retailers: ['Target', 'Walmart', 'Fanatics'],
-    lastPurchase: null,
-    successRate: 0
-  },
-];
-
-const mockActivity = [
-  { id: 1, product: 'Surging Sparks ETB', retailer: 'Target', quantity: 2, time: Date.now() - 1800000, status: 'success' },
-  { id: 2, product: 'Surging Sparks ETB', retailer: 'Walmart', quantity: 1, time: Date.now() - 3600000, status: 'success' },
-  { id: 3, product: 'Prismatic Evolutions Bundle', retailer: 'Target', quantity: 2, time: Date.now() - 5400000, status: 'success' },
-  { id: 4, product: 'Surging Sparks ETB', retailer: 'Pokemon Center', quantity: 1, time: Date.now() - 7200000, status: 'success' },
-  { id: 5, product: 'Topps Series 2 Hobby', retailer: 'Target', quantity: 1, time: Date.now() - 10800000, status: 'success' },
-];
 
 export default function Dashboard() {
   const [view, setView] = useState('dashboard');
-  const [products, setProducts] = useState(mockProducts);
-  const [activity, setActivity] = useState(mockActivity);
+  const [products, setProducts] = useState([]);
+  const [purchases, setPurchases] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [searchResults, setSearchResults] = useState([]);
   const [timePeriod, setTimePeriod] = useState('today');
   const [systemActive, setSystemActive] = useState(true);
 
+  // Fetch data from Supabase
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      // Fetch products
+      const { data: productsData, error: productsError } = await supabase
+        .from('products')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (productsError) throw productsError;
+
+      // Fetch purchases
+      const { data: purchasesData, error: purchasesError } = await supabase
+        .from('purchases')
+        .select('*')
+        .order('purchased_at', { ascending: false })
+        .limit(10);
+
+      if (purchasesError) throw purchasesError;
+
+      // Transform products data
+      const transformedProducts = (productsData || []).map(p => ({
+        id: p.id,
+        name: p.name,
+        image: getProductEmoji(p.name),
+        category: getCategory(p.name),
+        msrp: parseFloat(p.target_price) || 0,
+        status: p.is_active ? 'active' : 'watching',
+        purchased: {
+          today: p.purchase_count || 0,
+          week: p.purchase_count || 0,
+          month: p.purchase_count || 0,
+          total: p.purchase_count || 0
+        },
+        retailers: [p.retailer],
+        lastPurchase: p.last_checked ? new Date(p.last_checked).getTime() : null,
+        successRate: 0.75
+      }));
+
+      // Transform purchases data
+      const transformedPurchases = (purchasesData || []).map(p => ({
+        id: p.id,
+        product: p.product_name,
+        retailer: p.retailer,
+        quantity: p.quantity,
+        time: new Date(p.purchased_at).getTime(),
+        status: p.status,
+        orderNumber: p.order_number,
+        total: parseFloat(p.total) || 0
+      }));
+
+      setProducts(transformedProducts);
+      setPurchases(transformedPurchases);
+    } catch (err) {
+      console.error('Error fetching data:', err);
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getProductEmoji = (name) => {
+    const lower = name.toLowerCase();
+    if (lower.includes('pokemon') || lower.includes('sparks') || lower.includes('evolutions')) return '⚡';
+    if (lower.includes('topps') || lower.includes('baseball')) return '⚾';
+    if (lower.includes('panini') || lower.includes('basketball') || lower.includes('prizm')) return '🏀';
+    if (lower.includes('football')) return '🏈';
+    return '📦';
+  };
+
+  const getCategory = (name) => {
+    const lower = name.toLowerCase();
+    if (lower.includes('pokemon') || lower.includes('sparks') || lower.includes('evolutions')) return 'Pokemon';
+    if (lower.includes('topps') || lower.includes('panini') || lower.includes('prizm')) return 'Sports';
+    return 'Other';
+  };
+
   // Calculate totals
   const totals = {
-    today: products.reduce((sum, p) => sum + p.purchased.today, 0),
-    week: products.reduce((sum, p) => sum + p.purchased.week, 0),
-    month: products.reduce((sum, p) => sum + p.purchased.month, 0),
+    today: products.reduce((sum, p) => sum + (p.purchased?.today || 0), 0),
+    week: products.reduce((sum, p) => sum + (p.purchased?.week || 0), 0),
+    month: products.reduce((sum, p) => sum + (p.purchased?.month || 0), 0),
   };
 
   const formatTime = (ts) => {
@@ -95,7 +122,6 @@ export default function Dashboard() {
     if (!searchQuery.trim()) return;
     setIsSearching(true);
     
-    // Simulate search - in real app this would search retailer APIs
     setTimeout(() => {
       setSearchResults([
         { name: searchQuery, retailers: ['Target', 'Walmart', 'Best Buy'], msrp: 49.99, available: true },
@@ -106,24 +132,44 @@ export default function Dashboard() {
     }, 1000);
   };
 
-  const addProduct = (product) => {
-    const newProduct = {
-      id: products.length + 1,
-      name: product.name,
-      image: '📦',
-      category: 'New',
-      msrp: product.msrp,
-      status: 'active',
-      purchased: { today: 0, week: 0, month: 0, total: 0 },
-      retailers: product.retailers,
-      lastPurchase: null,
-      successRate: 0
-    };
-    setProducts([...products, newProduct]);
-    setSearchResults([]);
-    setSearchQuery('');
-    setView('dashboard');
+  const addProduct = async (product) => {
+    try {
+      const { data, error } = await supabase
+        .from('products')
+        .insert([{
+          name: product.name,
+          retailer: product.retailers[0] || 'Target',
+          url: `https://example.com/${product.name.toLowerCase().replace(/\s+/g, '-')}`,
+          target_price: product.msrp,
+          max_quantity: 1,
+          is_active: true,
+          purchase_count: 0
+        }])
+        .select();
+
+      if (error) throw error;
+
+      // Refresh data
+      await fetchData();
+      setSearchResults([]);
+      setSearchQuery('');
+      setView('dashboard');
+    } catch (err) {
+      console.error('Error adding product:', err);
+      alert('Failed to add product: ' + err.message);
+    }
   };
+
+  if (loading) {
+    return (
+      <div style={styles.app}>
+        <div style={styles.loadingContainer}>
+          <div style={styles.loadingSpinner}>⚡</div>
+          <p style={styles.loadingText}>Loading DROPWATCH...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={styles.app}>
@@ -153,25 +199,34 @@ export default function Dashboard() {
         </div>
 
         <div style={styles.headerRight}>
+          <button 
+            style={styles.refreshBtn}
+            onClick={fetchData}
+            title="Refresh data"
+          >
+            🔄
+          </button>
           <div style={styles.systemStatus}>
             <span style={{...styles.statusDot, backgroundColor: systemActive ? '#00D26A' : '#666'}} />
             <span style={styles.statusText}>{systemActive ? 'Active' : 'Paused'}</span>
           </div>
-          <button 
-            style={styles.adminLink}
-            onClick={() => window.location.href = '/admin'}
-          >
-            Admin
-          </button>
         </div>
       </header>
+
+      {/* Error Banner */}
+      {error && (
+        <div style={styles.errorBanner}>
+          ⚠️ {error}
+          <button style={styles.dismissBtn} onClick={() => setError(null)}>×</button>
+        </div>
+      )}
 
       {/* Main Content */}
       <main style={styles.main}>
         {view === 'dashboard' && (
           <DashboardView 
             products={products}
-            activity={activity}
+            purchases={purchases}
             totals={totals}
             timePeriod={timePeriod}
             setTimePeriod={setTimePeriod}
@@ -198,7 +253,7 @@ export default function Dashboard() {
 // DASHBOARD VIEW
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function DashboardView({ products, activity, totals, timePeriod, setTimePeriod, formatTime }) {
+function DashboardView({ products, purchases, totals, timePeriod, setTimePeriod, formatTime }) {
   return (
     <div style={styles.dashboard}>
       {/* Summary Cards */}
@@ -234,22 +289,26 @@ function DashboardView({ products, activity, totals, timePeriod, setTimePeriod, 
         <div style={styles.productsSection}>
           <div style={styles.sectionHeader}>
             <h2 style={styles.sectionTitle}>Products</h2>
-            <div style={styles.filterTabs}>
-              <button style={{...styles.filterTab, ...styles.filterTabActive}}>All</button>
-              <button style={styles.filterTab}>Pokemon</button>
-              <button style={styles.filterTab}>Sports</button>
-            </div>
+            <span style={styles.productCount}>{products.length} total</span>
           </div>
           
           <div style={styles.productsList}>
-            {products.map(product => (
-              <ProductCard 
-                key={product.id} 
-                product={product} 
-                timePeriod={timePeriod}
-                formatTime={formatTime}
-              />
-            ))}
+            {products.length === 0 ? (
+              <div style={styles.emptyState}>
+                <span style={styles.emptyIcon}>📦</span>
+                <p style={styles.emptyText}>No products yet</p>
+                <p style={styles.emptySubtext}>Add products to start tracking</p>
+              </div>
+            ) : (
+              products.map(product => (
+                <ProductCard 
+                  key={product.id} 
+                  product={product} 
+                  timePeriod={timePeriod}
+                  formatTime={formatTime}
+                />
+              ))
+            )}
           </div>
         </div>
 
@@ -260,9 +319,16 @@ function DashboardView({ products, activity, totals, timePeriod, setTimePeriod, 
           </div>
           
           <div style={styles.activityList}>
-            {activity.map(item => (
-              <ActivityItem key={item.id} item={item} formatTime={formatTime} />
-            ))}
+            {purchases.length === 0 ? (
+              <div style={styles.emptyState}>
+                <span style={styles.emptyIcon}>🛒</span>
+                <p style={styles.emptyText}>No purchases yet</p>
+              </div>
+            ) : (
+              purchases.map(item => (
+                <ActivityItem key={item.id} item={item} formatTime={formatTime} />
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -288,7 +354,7 @@ function SummaryCard({ label, value, subtitle, active, onClick }) {
 }
 
 function ProductCard({ product, timePeriod, formatTime }) {
-  const purchaseCount = product.purchased[timePeriod] || product.purchased.today;
+  const purchaseCount = product.purchased?.[timePeriod] || product.purchased?.today || 0;
   
   return (
     <div style={styles.productCard}>
@@ -298,11 +364,11 @@ function ProductCard({ product, timePeriod, formatTime }) {
         <h3 style={styles.productName}>{product.name}</h3>
         <div style={styles.productMeta}>
           <span style={styles.productCategory}>{product.category}</span>
-          <span style={styles.productPrice}>${product.msrp}</span>
+          <span style={styles.productPrice}>${product.msrp?.toFixed(2)}</span>
         </div>
         <div style={styles.productRetailers}>
-          {product.retailers.map(r => (
-            <span key={r} style={styles.retailerTag}>{r}</span>
+          {product.retailers?.map((r, i) => (
+            <span key={i} style={styles.retailerTag}>{r}</span>
           ))}
         </div>
       </div>
@@ -312,24 +378,16 @@ function ProductCard({ product, timePeriod, formatTime }) {
           <span style={styles.purchaseNumber}>{purchaseCount}</span>
           <span style={styles.purchaseLabel}>purchased</span>
         </div>
-        {product.lastPurchase && (
-          <span style={styles.lastPurchase}>Last: {formatTime(product.lastPurchase)}</span>
-        )}
-        {product.successRate > 0 && (
-          <div style={styles.successRate}>
-            <div style={styles.successBar}>
-              <div style={{...styles.successFill, width: `${product.successRate * 100}%`}} />
-            </div>
-            <span style={styles.successText}>{Math.round(product.successRate * 100)}% success</span>
-          </div>
-        )}
+        <div style={styles.lastPurchase}>
+          Last: {formatTime(product.lastPurchase)}
+        </div>
       </div>
 
       <div style={styles.productStatus}>
         <span style={{
           ...styles.statusBadge,
-          backgroundColor: product.status === 'active' ? 'rgba(0,210,106,0.15)' : 'rgba(255,255,255,0.1)',
-          color: product.status === 'active' ? '#00D26A' : '#888'
+          backgroundColor: product.status === 'active' ? 'rgba(0,210,106,0.15)' : 'rgba(255,255,255,0.05)',
+          color: product.status === 'active' ? '#00D26A' : '#666'
         }}>
           {product.status === 'active' ? '● Active' : '○ Watching'}
         </span>
@@ -341,11 +399,13 @@ function ProductCard({ product, timePeriod, formatTime }) {
 function ActivityItem({ item, formatTime }) {
   return (
     <div style={styles.activityItem}>
-      <div style={styles.activityIcon}>✓</div>
+      <div style={styles.activityIcon}>
+        {item.status === 'completed' ? '✓' : '⏳'}
+      </div>
       <div style={styles.activityContent}>
         <span style={styles.activityProduct}>{item.product}</span>
         <span style={styles.activityDetails}>
-          {item.quantity}x from {item.retailer}
+          {item.quantity}x from {item.retailer} • ${item.total?.toFixed(2)}
         </span>
       </div>
       <span style={styles.activityTime}>{formatTime(item.time)}</span>
@@ -361,22 +421,22 @@ function AddProductView({ searchQuery, setSearchQuery, handleSearch, isSearching
   return (
     <div style={styles.addProduct}>
       <div style={styles.searchSection}>
-        <h2 style={styles.addTitle}>Add New Product</h2>
+        <h2 style={styles.addTitle}>Add Product to Track</h2>
         <p style={styles.addSubtitle}>Search for products across all retailers</p>
         
         <div style={styles.searchBox}>
           <input
             type="text"
-            placeholder="Search for a product (e.g., 'Surging Sparks ETB')"
+            placeholder="Search for a product..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
             style={styles.searchInput}
           />
           <button 
-            style={styles.searchButton}
             onClick={handleSearch}
             disabled={isSearching}
+            style={styles.searchButton}
           >
             {isSearching ? 'Searching...' : 'Search'}
           </button>
@@ -387,34 +447,30 @@ function AddProductView({ searchQuery, setSearchQuery, handleSearch, isSearching
         <div style={styles.resultsSection}>
           <h3 style={styles.resultsTitle}>Search Results</h3>
           <div style={styles.resultsList}>
-            {searchResults.map((result, idx) => (
-              <div key={idx} style={styles.resultCard}>
+            {searchResults.map((result, index) => (
+              <div key={index} style={styles.resultCard}>
                 <div style={styles.resultInfo}>
                   <h4 style={styles.resultName}>{result.name}</h4>
                   <div style={styles.resultMeta}>
                     <span style={styles.resultPrice}>${result.msrp}</span>
                     <span style={{
                       ...styles.resultAvailability,
-                      color: result.available ? '#00D26A' : '#FF6B6B'
+                      color: result.available ? '#00D26A' : '#FF4444'
                     }}>
-                      {result.available ? '● Available' : '○ Not Available'}
+                      {result.available ? 'In Stock' : 'Out of Stock'}
                     </span>
                   </div>
                   <div style={styles.resultRetailers}>
-                    {result.retailers.map(r => (
-                      <span key={r} style={styles.retailerTag}>{r}</span>
+                    {result.retailers.map((r, i) => (
+                      <span key={i} style={styles.retailerTag}>{r}</span>
                     ))}
                   </div>
                 </div>
                 <button 
-                  style={{
-                    ...styles.addButton,
-                    opacity: result.available ? 1 : 0.5
-                  }}
-                  onClick={() => result.available && addProduct(result)}
-                  disabled={!result.available}
+                  onClick={() => addProduct(result)}
+                  style={styles.addButton}
                 >
-                  + Add to Tracking
+                  + Add
                 </button>
               </div>
             ))}
@@ -422,15 +478,14 @@ function AddProductView({ searchQuery, setSearchQuery, handleSearch, isSearching
         </div>
       )}
 
-      {/* Quick Add Suggestions */}
       <div style={styles.suggestionsSection}>
-        <h3 style={styles.suggestionsTitle}>Popular Products</h3>
+        <h3 style={styles.suggestionsTitle}>Popular Searches</h3>
         <div style={styles.suggestionsList}>
-          {['Surging Sparks', 'Prismatic Evolutions', 'Topps Chrome', 'Panini Prizm'].map(term => (
+          {['Surging Sparks ETB', 'Prismatic Evolutions', 'Topps Series 2', 'Panini Prizm'].map((term, i) => (
             <button 
-              key={term}
-              style={styles.suggestionChip}
+              key={i}
               onClick={() => setSearchQuery(term)}
+              style={styles.suggestionChip}
             >
               {term}
             </button>
@@ -448,22 +503,32 @@ function AddProductView({ searchQuery, setSearchQuery, handleSearch, isSearching
 const styles = {
   app: {
     minHeight: '100vh',
-    backgroundColor: '#0D0D0F',
-    color: '#FFFFFF',
+    backgroundColor: '#0A0A0B',
+    color: '#FFF',
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
   },
-  
-  // Header
+  loadingContainer: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: '100vh',
+  },
+  loadingSpinner: {
+    fontSize: '48px',
+  },
+  loadingText: {
+    marginTop: '16px',
+    color: '#666',
+    fontSize: '14px',
+  },
   header: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: '16px 32px',
-    borderBottom: '1px solid rgba(255,255,255,0.08)',
-    backgroundColor: '#0D0D0F',
-    position: 'sticky',
-    top: 0,
-    zIndex: 100,
+    backgroundColor: 'rgba(255,255,255,0.02)',
+    borderBottom: '1px solid rgba(255,255,255,0.06)',
   },
   headerLeft: {
     display: 'flex',
@@ -474,7 +539,7 @@ const styles = {
     margin: 0,
     fontSize: '20px',
     fontWeight: '700',
-    letterSpacing: '-0.5px',
+    color: '#FFF',
     display: 'flex',
     alignItems: 'center',
     gap: '8px',
@@ -486,7 +551,7 @@ const styles = {
     fontSize: '13px',
     color: '#666',
     paddingLeft: '16px',
-    borderLeft: '1px solid #333',
+    borderLeft: '1px solid rgba(255,255,255,0.1)',
   },
   headerCenter: {
     display: 'flex',
@@ -496,7 +561,7 @@ const styles = {
     padding: '10px 20px',
     border: 'none',
     borderRadius: '8px',
-    background: 'transparent',
+    backgroundColor: 'transparent',
     color: '#888',
     fontSize: '14px',
     fontWeight: '500',
@@ -504,13 +569,21 @@ const styles = {
     transition: 'all 0.2s',
   },
   navBtnActive: {
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: 'rgba(255,255,255,0.08)',
     color: '#FFF',
   },
   headerRight: {
     display: 'flex',
     alignItems: 'center',
-    gap: '20px',
+    gap: '16px',
+  },
+  refreshBtn: {
+    padding: '8px 12px',
+    border: 'none',
+    borderRadius: '6px',
+    backgroundColor: 'transparent',
+    cursor: 'pointer',
+    fontSize: '16px',
   },
   systemStatus: {
     display: 'flex',
@@ -529,28 +602,34 @@ const styles = {
     fontSize: '13px',
     color: '#AAA',
   },
-  adminLink: {
-    padding: '8px 16px',
-    border: '1px solid #333',
-    borderRadius: '6px',
-    background: 'transparent',
-    color: '#888',
-    fontSize: '13px',
+  errorBanner: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '12px',
+    padding: '12px 24px',
+    backgroundColor: 'rgba(255,68,68,0.1)',
+    borderBottom: '1px solid rgba(255,68,68,0.2)',
+    color: '#FF4444',
+    fontSize: '14px',
+  },
+  dismissBtn: {
+    padding: '4px 8px',
+    border: 'none',
+    backgroundColor: 'transparent',
+    color: '#FF4444',
+    fontSize: '18px',
     cursor: 'pointer',
   },
-
-  // Main
   main: {
     padding: '32px',
     maxWidth: '1400px',
     margin: '0 auto',
   },
-
-  // Dashboard
   dashboard: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '32px',
+    gap: '24px',
   },
   summaryRow: {
     display: 'grid',
@@ -564,75 +643,75 @@ const styles = {
     border: '1px solid rgba(255,255,255,0.06)',
     display: 'flex',
     flexDirection: 'column',
-    alignItems: 'center',
+    gap: '4px',
     transition: 'all 0.2s',
   },
   summaryCardActive: {
-    backgroundColor: 'rgba(0,210,106,0.1)',
+    backgroundColor: 'rgba(0,210,106,0.08)',
     borderColor: 'rgba(0,210,106,0.3)',
   },
   summaryValue: {
-    fontSize: '36px',
+    fontSize: '32px',
     fontWeight: '700',
     color: '#FFF',
-    lineHeight: 1,
   },
   summaryLabel: {
     fontSize: '14px',
     color: '#888',
-    marginTop: '8px',
   },
   summarySubtitle: {
     fontSize: '12px',
     color: '#555',
-    marginTop: '2px',
   },
-
-  // Content Grid
   contentGrid: {
     display: 'grid',
-    gridTemplateColumns: '1fr 380px',
+    gridTemplateColumns: '1fr 400px',
     gap: '24px',
   },
-  
-  // Products Section
   productsSection: {
-    display: 'flex',
-    flexDirection: 'column',
+    backgroundColor: 'rgba(255,255,255,0.02)',
+    borderRadius: '12px',
+    border: '1px solid rgba(255,255,255,0.06)',
+    padding: '20px',
   },
   sectionHeader: {
     display: 'flex',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: '16px',
+    justifyContent: 'space-between',
+    marginBottom: '20px',
   },
   sectionTitle: {
     margin: 0,
-    fontSize: '18px',
+    fontSize: '16px',
     fontWeight: '600',
     color: '#FFF',
   },
-  filterTabs: {
-    display: 'flex',
-    gap: '4px',
-  },
-  filterTab: {
-    padding: '6px 14px',
-    border: 'none',
-    borderRadius: '6px',
-    background: 'transparent',
-    color: '#666',
+  productCount: {
     fontSize: '13px',
-    cursor: 'pointer',
-  },
-  filterTabActive: {
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    color: '#FFF',
+    color: '#666',
   },
   productsList: {
     display: 'flex',
     flexDirection: 'column',
     gap: '12px',
+  },
+  emptyState: {
+    padding: '48px 24px',
+    textAlign: 'center',
+  },
+  emptyIcon: {
+    fontSize: '48px',
+    opacity: 0.3,
+  },
+  emptyText: {
+    margin: '16px 0 4px',
+    fontSize: '16px',
+    color: '#666',
+  },
+  emptySubtext: {
+    margin: 0,
+    fontSize: '13px',
+    color: '#444',
   },
   productCard: {
     display: 'flex',
@@ -715,28 +794,6 @@ const styles = {
     fontSize: '11px',
     color: '#555',
   },
-  successRate: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    marginTop: '4px',
-  },
-  successBar: {
-    width: '50px',
-    height: '4px',
-    borderRadius: '2px',
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    overflow: 'hidden',
-  },
-  successFill: {
-    height: '100%',
-    backgroundColor: '#00D26A',
-    borderRadius: '2px',
-  },
-  successText: {
-    fontSize: '11px',
-    color: '#666',
-  },
   productStatus: {
     marginLeft: '16px',
   },
@@ -746,8 +803,6 @@ const styles = {
     fontSize: '12px',
     fontWeight: '500',
   },
-
-  // Activity Section
   activitySection: {
     backgroundColor: 'rgba(255,255,255,0.02)',
     borderRadius: '12px',
@@ -796,8 +851,6 @@ const styles = {
     fontSize: '12px',
     color: '#555',
   },
-
-  // Add Product View
   addProduct: {
     maxWidth: '700px',
     margin: '0 auto',
