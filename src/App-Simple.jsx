@@ -208,6 +208,12 @@ export default function Dashboard() {
           >
             + Add Product
           </button>
+          <button 
+            style={styles.navBtn}
+            onClick={() => window.location.href = '/admin'}
+          >
+            ⚙ Admin
+          </button>
         </div>
 
         <div style={styles.headerRight}>
