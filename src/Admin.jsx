@@ -1,317 +1,291 @@
 import React, { useState, useEffect } from 'react';
+import { supabase } from './supabaseClient';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DROPWATCH ADMIN PANEL
-// All complex settings, profiles, and system configuration
+// Full product management, purchase history, system controls
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const mockProfiles = [
-  { id: 'P1', name: 'Primary', health: 98, status: 'READY', successes: 47, failures: 2, lastUsed: Date.now() - 3600000 },
-  { id: 'P2', name: 'Backup Alpha', health: 85, status: 'READY', successes: 33, failures: 5, lastUsed: Date.now() - 7200000 },
-  { id: 'P3', name: 'Backup Beta', health: 72, status: 'COOLING', successes: 32, failures: 9, lastUsed: Date.now() - 86400000 },
-  { id: 'P4', name: 'Reserve', health: 100, status: 'VIRGIN', successes: 0, failures: 0, lastUsed: null },
-];
-
-const mockLogs = [
-  { id: 1, time: Date.now() - 120000, type: 'SUCCESS', message: 'Checkout complete - Target - Surging Sparks ETB', profile: 'P1' },
-  { id: 2, time: Date.now() - 180000, type: 'DETECT', message: 'Drop detected - Pokemon Center - Prismatic Bundle', profile: null },
-  { id: 3, time: Date.now() - 240000, type: 'WARN', message: 'Inventory flapping detected - Walmart', profile: null },
-  { id: 4, time: Date.now() - 300000, type: 'FAIL', message: 'Queue timeout - Pokemon Center', profile: 'P3' },
-  { id: 5, time: Date.now() - 360000, type: 'INFO', message: 'System throttle adjusted to 75%', profile: null },
-  { id: 6, time: Date.now() - 420000, type: 'SUCCESS', message: 'Checkout complete - Walmart - Surging Sparks ETB', profile: 'P1' },
-  { id: 7, time: Date.now() - 500000, type: 'SUCCESS', message: 'Checkout complete - Target - Prismatic Bundle', profile: 'P2' },
-];
-
 export default function AdminPanel() {
-  const [activeTab, setActiveTab] = useState('overview');
-  const [systemStatus, setSystemStatus] = useState({
-    mode: 'ARMED',
-    throttle: 0.72,
-    activeTasks: 2,
-    queueDepth: 5,
+  const [activeTab, setActiveTab] = useState('products');
+  const [products, setProducts] = useState([]);
+  const [purchases, setPurchases] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editingProduct, setEditingProduct] = useState(null);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [settings, setSettings] = useState({
+    systemActive: true,
+    checkInterval: 30,
+    maxQuantityPerProduct: 2,
+    alertEmail: 'ryan@radical.company'
   });
-  const [profiles, setProfiles] = useState(mockProfiles);
-  const [logs, setLogs] = useState(mockLogs);
 
-  const formatTime = (ts) => {
-    if (!ts) return 'Never';
-    const diff = Date.now() - ts;
-    if (diff < 60000) return 'Just now';
-    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-    return `${Math.floor(diff / 86400000)}d ago`;
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+      const [productsRes, purchasesRes] = await Promise.all([
+        supabase.from('products').select('*').order('created_at', { ascending: false }),
+        supabase.from('purchases').select('*').order('purchased_at', { ascending: false }).limit(50)
+      ]);
+
+      if (productsRes.data) setProducts(productsRes.data);
+      if (purchasesRes.data) setPurchases(purchasesRes.data);
+    } catch (err) {
+      console.error('Error fetching data:', err);
+    }
+    setLoading(false);
+  };
+
+  const deleteProduct = async (id) => {
+    if (!confirm('Delete this product?')) return;
+    const { error } = await supabase.from('products').delete().eq('id', id);
+    if (!error) {
+      setProducts(products.filter(p => p.id !== id));
+    }
+  };
+
+  const toggleProductActive = async (product) => {
+    const { error } = await supabase
+      .from('products')
+      .update({ is_active: !product.is_active })
+      .eq('id', product.id);
+    
+    if (!error) {
+      setProducts(products.map(p => 
+        p.id === product.id ? { ...p, is_active: !p.is_active } : p
+      ));
+    }
+  };
+
+  const saveProduct = async (productData) => {
+    if (editingProduct) {
+      const { error } = await supabase
+        .from('products')
+        .update(productData)
+        .eq('id', editingProduct.id);
+      
+      if (!error) {
+        setProducts(products.map(p => 
+          p.id === editingProduct.id ? { ...p, ...productData } : p
+        ));
+        setEditingProduct(null);
+      }
+    } else {
+      const { data, error } = await supabase
+        .from('products')
+        .insert([productData])
+        .select();
+      
+      if (!error && data) {
+        setProducts([data[0], ...products]);
+        setShowAddModal(false);
+      }
+    }
   };
 
   return (
     <div style={styles.app}>
-      {/* Sidebar */}
-      <aside style={styles.sidebar}>
-        <div style={styles.sidebarHeader}>
-          <span style={styles.adminBadge}>ADMIN</span>
-          <h1 style={styles.sidebarTitle}>DROPWATCH</h1>
+      {/* Header */}
+      <header style={styles.header}>
+        <div style={styles.headerLeft}>
+          <h1 style={styles.logo}>
+            <span style={styles.logoIcon}>⚡</span>
+            DROPWATCH
+            <span style={styles.adminBadge}>ADMIN</span>
+          </h1>
         </div>
-
-        <nav style={styles.nav}>
-          <NavItem icon="📊" label="Overview" active={activeTab === 'overview'} onClick={() => setActiveTab('overview')} />
-          <NavItem icon="👤" label="Profiles" active={activeTab === 'profiles'} onClick={() => setActiveTab('profiles')} />
-          <NavItem icon="🏪" label="Retailers" active={activeTab === 'retailers'} onClick={() => setActiveTab('retailers')} />
-          <NavItem icon="⚙️" label="Settings" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
-          <NavItem icon="📜" label="Logs" active={activeTab === 'logs'} onClick={() => setActiveTab('logs')} />
-        </nav>
-
-        <div style={styles.sidebarFooter}>
+        <div style={styles.headerRight}>
           <a href="/" style={styles.backLink}>← Back to Dashboard</a>
         </div>
-      </aside>
+      </header>
+
+      {/* Tabs */}
+      <div style={styles.tabs}>
+        {['products', 'purchases', 'settings'].map(tab => (
+          <button
+            key={tab}
+            style={{
+              ...styles.tab,
+              ...(activeTab === tab ? styles.tabActive : {})
+            }}
+            onClick={() => setActiveTab(tab)}
+          >
+            {tab === 'products' && '📦 '}
+            {tab === 'purchases' && '🛒 '}
+            {tab === 'settings' && '⚙️ '}
+            {tab.charAt(0).toUpperCase() + tab.slice(1)}
+          </button>
+        ))}
+      </div>
 
       {/* Main Content */}
       <main style={styles.main}>
-        {/* Top Bar */}
-        <header style={styles.topBar}>
-          <h2 style={styles.pageTitle}>
-            {activeTab === 'overview' && 'System Overview'}
-            {activeTab === 'profiles' && 'Buyer Profiles'}
-            {activeTab === 'retailers' && 'Retailer Configuration'}
-            {activeTab === 'settings' && 'System Settings'}
-            {activeTab === 'logs' && 'Activity Logs'}
-          </h2>
-          
-          <div style={styles.systemControls}>
-            <div style={styles.indicator}>
-              <span style={styles.indicatorLabel}>Mode</span>
-              <span style={{...styles.indicatorValue, color: systemStatus.mode === 'ARMED' ? '#00D26A' : '#888'}}>
-                {systemStatus.mode}
-              </span>
-            </div>
-            <div style={styles.indicator}>
-              <span style={styles.indicatorLabel}>Throttle</span>
-              <span style={styles.indicatorValue}>{Math.round(systemStatus.throttle * 100)}%</span>
-            </div>
-            <div style={styles.indicator}>
-              <span style={styles.indicatorLabel}>Active</span>
-              <span style={styles.indicatorValue}>{systemStatus.activeTasks}</span>
-            </div>
-            <button 
-              style={{
-                ...styles.modeButton,
-                backgroundColor: systemStatus.mode === 'ARMED' ? 'rgba(255,68,68,0.15)' : 'rgba(0,210,106,0.15)',
-                color: systemStatus.mode === 'ARMED' ? '#FF4444' : '#00D26A',
-              }}
-              onClick={() => setSystemStatus(s => ({ ...s, mode: s.mode === 'ARMED' ? 'STANDBY' : 'ARMED' }))}
-            >
-              {systemStatus.mode === 'ARMED' ? '■ Disarm System' : '▶ Arm System'}
-            </button>
-          </div>
-        </header>
-
-        {/* Content Area */}
-        <div style={styles.content}>
-          {activeTab === 'overview' && <OverviewTab systemStatus={systemStatus} profiles={profiles} logs={logs} formatTime={formatTime} />}
-          {activeTab === 'profiles' && <ProfilesTab profiles={profiles} setProfiles={setProfiles} formatTime={formatTime} />}
-          {activeTab === 'retailers' && <RetailersTab />}
-          {activeTab === 'settings' && <SettingsTab systemStatus={systemStatus} setSystemStatus={setSystemStatus} />}
-          {activeTab === 'logs' && <LogsTab logs={logs} formatTime={formatTime} />}
-        </div>
+        {loading ? (
+          <div style={styles.loading}>Loading...</div>
+        ) : (
+          <>
+            {activeTab === 'products' && (
+              <ProductsTab 
+                products={products}
+                onEdit={setEditingProduct}
+                onDelete={deleteProduct}
+                onToggle={toggleProductActive}
+                onAdd={() => setShowAddModal(true)}
+              />
+            )}
+            {activeTab === 'purchases' && (
+              <PurchasesTab purchases={purchases} />
+            )}
+            {activeTab === 'settings' && (
+              <SettingsTab settings={settings} setSettings={setSettings} />
+            )}
+          </>
+        )}
       </main>
+
+      {/* Edit/Add Modal */}
+      {(editingProduct || showAddModal) && (
+        <ProductModal
+          product={editingProduct}
+          onSave={saveProduct}
+          onClose={() => {
+            setEditingProduct(null);
+            setShowAddModal(false);
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function NavItem({ icon, label, active, onClick }) {
-  return (
-    <button style={{...styles.navItem, ...(active ? styles.navItemActive : {})}} onClick={onClick}>
-      <span style={styles.navIcon}>{icon}</span>
-      <span style={styles.navLabel}>{label}</span>
-    </button>
-  );
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
-// OVERVIEW TAB
+// PRODUCTS TAB
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function OverviewTab({ systemStatus, profiles, logs, formatTime }) {
-  const readyProfiles = profiles.filter(p => p.status === 'READY' || p.status === 'VIRGIN').length;
-  const recentSuccesses = logs.filter(l => l.type === 'SUCCESS').length;
-  const recentFailures = logs.filter(l => l.type === 'FAIL').length;
-
+function ProductsTab({ products, onEdit, onDelete, onToggle, onAdd }) {
   return (
-    <div style={styles.overviewGrid}>
-      {/* Quick Stats */}
-      <div style={styles.statsRow}>
-        <StatCard label="Ready Profiles" value={readyProfiles} total={profiles.length} color="#00D26A" />
-        <StatCard label="Recent Successes" value={recentSuccesses} color="#00D26A" />
-        <StatCard label="Recent Failures" value={recentFailures} color="#FF6B6B" />
-        <StatCard label="Queue Depth" value={systemStatus.queueDepth} color="#00BFFF" />
+    <div>
+      <div style={styles.sectionHeader}>
+        <h2 style={styles.sectionTitle}>Products ({products.length})</h2>
+        <button style={styles.addButton} onClick={onAdd}>
+          + Add Product
+        </button>
       </div>
 
-      {/* Profile Health */}
-      <div style={styles.card}>
-        <h3 style={styles.cardTitle}>Profile Health</h3>
-        <div style={styles.healthBars}>
-          {profiles.map(profile => (
-            <div key={profile.id} style={styles.healthRow}>
-              <span style={styles.healthName}>{profile.name}</span>
-              <div style={styles.healthBarContainer}>
-                <div style={{
-                  ...styles.healthBar,
-                  width: `${profile.health}%`,
-                  backgroundColor: profile.health > 80 ? '#00D26A' : profile.health > 50 ? '#FFD700' : '#FF4444'
-                }} />
-              </div>
-              <span style={styles.healthValue}>{profile.health}%</span>
-              <span style={{
-                ...styles.healthStatus,
-                color: profile.status === 'READY' ? '#00D26A' : profile.status === 'COOLING' ? '#FFD700' : '#888'
-              }}>
-                {profile.status}
-              </span>
-            </div>
+      <table style={styles.table}>
+        <thead>
+          <tr>
+            <th style={styles.th}>Name</th>
+            <th style={styles.th}>Retailer</th>
+            <th style={styles.th}>Target Price</th>
+            <th style={styles.th}>Max Qty</th>
+            <th style={styles.th}>Purchased</th>
+            <th style={styles.th}>Status</th>
+            <th style={styles.th}>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {products.map(product => (
+            <tr key={product.id} style={styles.tr}>
+              <td style={styles.td}>
+                <div style={styles.productName}>{product.name}</div>
+                <div style={styles.productUrl}>{product.url?.slice(0, 40)}...</div>
+              </td>
+              <td style={styles.td}>{product.retailer}</td>
+              <td style={styles.td}>${parseFloat(product.target_price).toFixed(2)}</td>
+              <td style={styles.td}>{product.max_quantity}</td>
+              <td style={styles.td}>{product.purchase_count || 0}</td>
+              <td style={styles.td}>
+                <button
+                  style={{
+                    ...styles.statusToggle,
+                    backgroundColor: product.is_active ? 'rgba(0,210,106,0.2)' : 'rgba(255,255,255,0.05)',
+                    color: product.is_active ? '#00D26A' : '#666'
+                  }}
+                  onClick={() => onToggle(product)}
+                >
+                  {product.is_active ? '● Active' : '○ Paused'}
+                </button>
+              </td>
+              <td style={styles.td}>
+                <div style={styles.actions}>
+                  <button style={styles.actionBtn} onClick={() => onEdit(product)}>Edit</button>
+                  <button style={{...styles.actionBtn, ...styles.deleteBtn}} onClick={() => onDelete(product.id)}>Delete</button>
+                </div>
+              </td>
+            </tr>
           ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PURCHASES TAB
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function PurchasesTab({ purchases }) {
+  const totalSpent = purchases.reduce((sum, p) => sum + parseFloat(p.total || 0), 0);
+
+  return (
+    <div>
+      <div style={styles.sectionHeader}>
+        <h2 style={styles.sectionTitle}>Purchase History ({purchases.length})</h2>
+        <div style={styles.totalSpent}>
+          Total Spent: <span style={styles.totalAmount}>${totalSpent.toFixed(2)}</span>
         </div>
       </div>
 
-      {/* Recent Activity */}
-      <div style={styles.card}>
-        <h3 style={styles.cardTitle}>Recent Activity</h3>
-        <div style={styles.recentLogs}>
-          {logs.slice(0, 5).map(log => (
-            <div key={log.id} style={styles.logRow}>
-              <span style={{
-                ...styles.logType,
-                color: log.type === 'SUCCESS' ? '#00D26A' : log.type === 'FAIL' ? '#FF4444' : log.type === 'WARN' ? '#FFD700' : '#888'
-              }}>
-                {log.type}
-              </span>
-              <span style={styles.logMessage}>{log.message}</span>
-              <span style={styles.logTime}>{formatTime(log.time)}</span>
-            </div>
+      <table style={styles.table}>
+        <thead>
+          <tr>
+            <th style={styles.th}>Date</th>
+            <th style={styles.th}>Product</th>
+            <th style={styles.th}>Retailer</th>
+            <th style={styles.th}>Qty</th>
+            <th style={styles.th}>Price</th>
+            <th style={styles.th}>Total</th>
+            <th style={styles.th}>Order #</th>
+            <th style={styles.th}>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {purchases.map(purchase => (
+            <tr key={purchase.id} style={styles.tr}>
+              <td style={styles.td}>
+                {new Date(purchase.purchased_at).toLocaleDateString()}
+                <div style={styles.timeText}>
+                  {new Date(purchase.purchased_at).toLocaleTimeString()}
+                </div>
+              </td>
+              <td style={styles.td}>{purchase.product_name}</td>
+              <td style={styles.td}>{purchase.retailer}</td>
+              <td style={styles.td}>{purchase.quantity}</td>
+              <td style={styles.td}>${parseFloat(purchase.price).toFixed(2)}</td>
+              <td style={{...styles.td, color: '#00D26A', fontWeight: '600'}}>
+                ${parseFloat(purchase.total).toFixed(2)}
+              </td>
+              <td style={styles.td}>
+                <code style={styles.orderNumber}>{purchase.order_number}</code>
+              </td>
+              <td style={styles.td}>
+                <span style={{
+                  ...styles.statusBadge,
+                  backgroundColor: purchase.status === 'completed' ? 'rgba(0,210,106,0.2)' : 'rgba(255,193,7,0.2)',
+                  color: purchase.status === 'completed' ? '#00D26A' : '#FFC107'
+                }}>
+                  {purchase.status}
+                </span>
+              </td>
+            </tr>
           ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function StatCard({ label, value, total, color }) {
-  return (
-    <div style={styles.statCard}>
-      <span style={{...styles.statValue, color}}>{value}{total && `/${total}`}</span>
-      <span style={styles.statLabel}>{label}</span>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// PROFILES TAB
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function ProfilesTab({ profiles, setProfiles, formatTime }) {
-  return (
-    <div style={styles.profilesGrid}>
-      {profiles.map(profile => (
-        <div key={profile.id} style={styles.profileCard}>
-          <div style={styles.profileHeader}>
-            <h3 style={styles.profileName}>{profile.name}</h3>
-            <span style={{
-              ...styles.profileStatus,
-              color: profile.status === 'READY' ? '#00D26A' : profile.status === 'COOLING' ? '#FFD700' : '#888'
-            }}>
-              {profile.status}
-            </span>
-          </div>
-
-          <div style={styles.profileHealth}>
-            <div style={styles.healthBarLarge}>
-              <div style={{
-                ...styles.healthBarFill,
-                width: `${profile.health}%`,
-                backgroundColor: profile.health > 80 ? '#00D26A' : profile.health > 50 ? '#FFD700' : '#FF4444'
-              }} />
-            </div>
-            <span style={styles.healthPercent}>{profile.health}% Health</span>
-          </div>
-
-          <div style={styles.profileStats}>
-            <div style={styles.profileStat}>
-              <span style={styles.statNum}>{profile.successes}</span>
-              <span style={styles.statLbl}>Successes</span>
-            </div>
-            <div style={styles.profileStat}>
-              <span style={styles.statNum}>{profile.failures}</span>
-              <span style={styles.statLbl}>Failures</span>
-            </div>
-            <div style={styles.profileStat}>
-              <span style={styles.statNum}>
-                {profile.successes + profile.failures > 0 
-                  ? Math.round((profile.successes / (profile.successes + profile.failures)) * 100) 
-                  : 100}%
-              </span>
-              <span style={styles.statLbl}>Rate</span>
-            </div>
-          </div>
-
-          <div style={styles.profileFooter}>
-            <span style={styles.lastUsed}>Last used: {formatTime(profile.lastUsed)}</span>
-            <div style={styles.profileActions}>
-              <button style={styles.actionBtn}>Edit</button>
-              <button style={{...styles.actionBtn, ...styles.actionBtnDanger}}>Reset</button>
-            </div>
-          </div>
-        </div>
-      ))}
-
-      <button style={styles.addProfileCard}>
-        <span style={styles.addIcon}>+</span>
-        <span>Add Profile</span>
-      </button>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// RETAILERS TAB
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function RetailersTab() {
-  const [retailers, setRetailers] = useState([
-    { id: 1, name: 'Target', enabled: true, accounts: 3, successRate: 0.78 },
-    { id: 2, name: 'Walmart', enabled: true, accounts: 3, successRate: 0.72 },
-    { id: 3, name: 'Pokemon Center', enabled: true, accounts: 3, successRate: 0.45 },
-    { id: 4, name: 'Best Buy', enabled: true, accounts: 2, successRate: 0.65 },
-    { id: 5, name: 'GameStop', enabled: false, accounts: 2, successRate: 0.55 },
-    { id: 6, name: 'Amazon', enabled: false, accounts: 1, successRate: 0 },
-  ]);
-
-  const toggleRetailer = (id) => {
-    setRetailers(retailers.map(r => r.id === id ? { ...r, enabled: !r.enabled } : r));
-  };
-
-  return (
-    <div style={styles.retailersList}>
-      {retailers.map(retailer => (
-        <div key={retailer.id} style={{...styles.retailerCard, opacity: retailer.enabled ? 1 : 0.5}}>
-          <div style={styles.retailerInfo}>
-            <h3 style={styles.retailerName}>{retailer.name}</h3>
-            <div style={styles.retailerMeta}>
-              <span>{retailer.accounts} accounts configured</span>
-              {retailer.successRate > 0 && (
-                <span style={{color: '#00D26A'}}>{Math.round(retailer.successRate * 100)}% success rate</span>
-              )}
-            </div>
-          </div>
-          
-          <div style={styles.retailerControls}>
-            <button style={styles.configBtn}>Configure</button>
-            <div 
-              style={{...styles.toggle, ...(retailer.enabled ? styles.toggleOn : {})}}
-              onClick={() => toggleRetailer(retailer.id)}
-            >
-              <div style={{...styles.toggleKnob, ...(retailer.enabled ? styles.toggleKnobOn : {})}} />
-            </div>
-          </div>
-        </div>
-      ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -320,133 +294,195 @@ function RetailersTab() {
 // SETTINGS TAB
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function SettingsTab({ systemStatus, setSystemStatus }) {
+function SettingsTab({ settings, setSettings }) {
+  const [saved, setSaved] = useState(false);
+
+  const handleSave = () => {
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
   return (
-    <div style={styles.settingsGrid}>
-      <div style={styles.settingsSection}>
-        <h3 style={styles.settingsSectionTitle}>Throttle Controls</h3>
-        
-        <div style={styles.settingRow}>
-          <div style={styles.settingInfo}>
-            <span style={styles.settingLabel}>Max Concurrency</span>
-            <span style={styles.settingDesc}>Simultaneous checkout attempts</span>
-          </div>
-          <input type="number" defaultValue={3} min={1} max={10} style={styles.numberInput} />
-        </div>
+    <div style={styles.settingsContainer}>
+      <h2 style={styles.sectionTitle}>System Settings</h2>
 
-        <div style={styles.settingRow}>
-          <div style={styles.settingInfo}>
-            <span style={styles.settingLabel}>Request Delay</span>
-            <span style={styles.settingDesc}>Milliseconds between requests</span>
-          </div>
-          <input type="number" defaultValue={500} min={100} max={2000} step={100} style={styles.numberInput} />
-        </div>
-
-        <div style={styles.settingRow}>
-          <div style={styles.settingInfo}>
-            <span style={styles.settingLabel}>Auto-throttle Threshold</span>
-            <span style={styles.settingDesc}>System load before throttling</span>
-          </div>
-          <input type="number" defaultValue={85} min={50} max={100} style={styles.numberInput} />
-        </div>
+      <div style={styles.settingGroup}>
+        <label style={styles.settingLabel}>System Status</label>
+        <button
+          style={{
+            ...styles.bigToggle,
+            backgroundColor: settings.systemActive ? '#00D26A' : '#333'
+          }}
+          onClick={() => setSettings({ ...settings, systemActive: !settings.systemActive })}
+        >
+          {settings.systemActive ? '● ACTIVE' : '○ PAUSED'}
+        </button>
+        <p style={styles.settingHelp}>
+          {settings.systemActive 
+            ? 'System is actively monitoring and purchasing' 
+            : 'System is paused - no purchases will be made'}
+        </p>
       </div>
 
-      <div style={styles.settingsSection}>
-        <h3 style={styles.settingsSectionTitle}>Safety Controls</h3>
-        
-        <ToggleSetting label="Auto-abort on 3+ failures" defaultChecked={true} />
-        <ToggleSetting label="Automatic profile rotation" defaultChecked={true} />
-        <ToggleSetting label="Flapping detection" defaultChecked={true} />
-        <ToggleSetting label="Cascade failure isolation" defaultChecked={true} />
+      <div style={styles.settingGroup}>
+        <label style={styles.settingLabel}>Check Interval (seconds)</label>
+        <input
+          type="number"
+          value={settings.checkInterval}
+          onChange={(e) => setSettings({ ...settings, checkInterval: parseInt(e.target.value) })}
+          style={styles.input}
+          min="10"
+          max="300"
+        />
+        <p style={styles.settingHelp}>How often to check retailer sites for stock</p>
       </div>
 
-      <div style={styles.settingsSection}>
-        <h3 style={styles.settingsSectionTitle}>Alert Channels</h3>
-        
-        <ToggleSetting label="SMS Alerts (Twilio)" defaultChecked={true} />
-        <ToggleSetting label="Slack Notifications" defaultChecked={false} />
-        <ToggleSetting label="Email Summaries" defaultChecked={true} />
-        <ToggleSetting label="Push Notifications" defaultChecked={true} />
+      <div style={styles.settingGroup}>
+        <label style={styles.settingLabel}>Default Max Quantity</label>
+        <input
+          type="number"
+          value={settings.maxQuantityPerProduct}
+          onChange={(e) => setSettings({ ...settings, maxQuantityPerProduct: parseInt(e.target.value) })}
+          style={styles.input}
+          min="1"
+          max="10"
+        />
+        <p style={styles.settingHelp}>Maximum quantity to purchase per product per check</p>
       </div>
 
-      <div style={styles.settingsSection}>
-        <h3 style={styles.settingsSectionTitle}>Danger Zone</h3>
-        
-        <button style={styles.dangerBtn}>Clear All Logs</button>
-        <button style={styles.dangerBtn}>Reset All Profiles</button>
-        <button style={styles.dangerBtn}>Factory Reset</button>
+      <div style={styles.settingGroup}>
+        <label style={styles.settingLabel}>Alert Email</label>
+        <input
+          type="email"
+          value={settings.alertEmail}
+          onChange={(e) => setSettings({ ...settings, alertEmail: e.target.value })}
+          style={styles.input}
+          placeholder="your@email.com"
+        />
+        <p style={styles.settingHelp}>Email address for purchase notifications</p>
       </div>
-    </div>
-  );
-}
 
-function ToggleSetting({ label, defaultChecked }) {
-  const [checked, setChecked] = useState(defaultChecked);
-  
-  return (
-    <div style={styles.toggleSettingRow}>
-      <span style={styles.toggleSettingLabel}>{label}</span>
-      <div 
-        style={{...styles.toggle, ...(checked ? styles.toggleOn : {})}}
-        onClick={() => setChecked(!checked)}
-      >
-        <div style={{...styles.toggleKnob, ...(checked ? styles.toggleKnobOn : {})}} />
-      </div>
+      <button style={styles.saveButton} onClick={handleSave}>
+        {saved ? '✓ Saved!' : 'Save Settings'}
+      </button>
     </div>
   );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// LOGS TAB
+// PRODUCT MODAL
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function LogsTab({ logs, formatTime }) {
-  const [filter, setFilter] = useState('ALL');
+function ProductModal({ product, onSave, onClose }) {
+  const [form, setForm] = useState({
+    name: product?.name || '',
+    retailer: product?.retailer || 'Target',
+    url: product?.url || '',
+    target_price: product?.target_price || '',
+    max_quantity: product?.max_quantity || 1,
+    is_active: product?.is_active ?? true
+  });
 
-  const filteredLogs = filter === 'ALL' ? logs : logs.filter(l => l.type === filter);
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    onSave(form);
+  };
 
   return (
-    <div style={styles.logsContainer}>
-      <div style={styles.logsHeader}>
-        <div style={styles.logFilters}>
-          {['ALL', 'SUCCESS', 'FAIL', 'WARN', 'DETECT', 'INFO'].map(f => (
-            <button 
-              key={f}
-              style={{...styles.filterBtn, ...(filter === f ? styles.filterBtnActive : {})}}
-              onClick={() => setFilter(f)}
+    <div style={styles.modalOverlay} onClick={onClose}>
+      <div style={styles.modal} onClick={e => e.stopPropagation()}>
+        <h2 style={styles.modalTitle}>
+          {product ? 'Edit Product' : 'Add Product'}
+        </h2>
+        
+        <form onSubmit={handleSubmit}>
+          <div style={styles.formGroup}>
+            <label style={styles.formLabel}>Product Name</label>
+            <input
+              type="text"
+              value={form.name}
+              onChange={e => setForm({ ...form, name: e.target.value })}
+              style={styles.formInput}
+              placeholder="Surging Sparks Elite Trainer Box"
+              required
+            />
+          </div>
+
+          <div style={styles.formGroup}>
+            <label style={styles.formLabel}>Retailer</label>
+            <select
+              value={form.retailer}
+              onChange={e => setForm({ ...form, retailer: e.target.value })}
+              style={styles.formInput}
             >
-              {f}
-            </button>
-          ))}
-        </div>
-        <button style={styles.exportBtn}>Export Logs</button>
-      </div>
-
-      <div style={styles.logsTable}>
-        {filteredLogs.map(log => (
-          <div key={log.id} style={styles.logEntry}>
-            <span style={{
-              ...styles.logEntryType,
-              backgroundColor: 
-                log.type === 'SUCCESS' ? 'rgba(0,210,106,0.15)' :
-                log.type === 'FAIL' ? 'rgba(255,68,68,0.15)' :
-                log.type === 'WARN' ? 'rgba(255,215,0,0.15)' :
-                log.type === 'DETECT' ? 'rgba(0,191,255,0.15)' :
-                'rgba(255,255,255,0.05)',
-              color:
-                log.type === 'SUCCESS' ? '#00D26A' :
-                log.type === 'FAIL' ? '#FF4444' :
-                log.type === 'WARN' ? '#FFD700' :
-                log.type === 'DETECT' ? '#00BFFF' :
-                '#888'
-            }}>
-              {log.type}
-            </span>
-            <span style={styles.logEntryMessage}>{log.message}</span>
-            {log.profile && <span style={styles.logEntryProfile}>{log.profile}</span>}
-            <span style={styles.logEntryTime}>{formatTime(log.time)}</span>
+              <option value="Target">Target</option>
+              <option value="Walmart">Walmart</option>
+              <option value="Best Buy">Best Buy</option>
+              <option value="Pokemon Center">Pokemon Center</option>
+              <option value="GameStop">GameStop</option>
+              <option value="Amazon">Amazon</option>
+            </select>
           </div>
-        ))}
+
+          <div style={styles.formGroup}>
+            <label style={styles.formLabel}>Product URL</label>
+            <input
+              type="url"
+              value={form.url}
+              onChange={e => setForm({ ...form, url: e.target.value })}
+              style={styles.formInput}
+              placeholder="https://www.target.com/p/..."
+              required
+            />
+          </div>
+
+          <div style={styles.formRow}>
+            <div style={styles.formGroup}>
+              <label style={styles.formLabel}>Target Price</label>
+              <input
+                type="number"
+                step="0.01"
+                value={form.target_price}
+                onChange={e => setForm({ ...form, target_price: e.target.value })}
+                style={styles.formInput}
+                placeholder="49.99"
+                required
+              />
+            </div>
+
+            <div style={styles.formGroup}>
+              <label style={styles.formLabel}>Max Quantity</label>
+              <input
+                type="number"
+                value={form.max_quantity}
+                onChange={e => setForm({ ...form, max_quantity: parseInt(e.target.value) })}
+                style={styles.formInput}
+                min="1"
+                max="10"
+              />
+            </div>
+          </div>
+
+          <div style={styles.formGroup}>
+            <label style={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={form.is_active}
+                onChange={e => setForm({ ...form, is_active: e.target.checked })}
+              />
+              Active (start monitoring immediately)
+            </label>
+          </div>
+
+          <div style={styles.modalActions}>
+            <button type="button" style={styles.cancelBtn} onClick={onClose}>
+              Cancel
+            </button>
+            <button type="submit" style={styles.submitBtn}>
+              {product ? 'Save Changes' : 'Add Product'}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );
@@ -458,569 +494,326 @@ function LogsTab({ logs, formatTime }) {
 
 const styles = {
   app: {
-    display: 'flex',
     minHeight: '100vh',
-    backgroundColor: '#0A0A0C',
+    backgroundColor: '#0A0A0B',
     color: '#FFF',
-    fontFamily: '"JetBrains Mono", "SF Mono", monospace',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
   },
-
-  // Sidebar
-  sidebar: {
-    width: '220px',
-    backgroundColor: '#0D0D0F',
-    borderRight: '1px solid rgba(255,255,255,0.06)',
+  header: {
     display: 'flex',
-    flexDirection: 'column',
-    position: 'fixed',
-    height: '100vh',
-  },
-  sidebarHeader: {
-    padding: '24px 20px',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '16px 32px',
+    backgroundColor: 'rgba(255,255,255,0.02)',
     borderBottom: '1px solid rgba(255,255,255,0.06)',
   },
-  adminBadge: {
-    fontSize: '10px',
-    fontWeight: '700',
-    letterSpacing: '2px',
-    color: '#FF4444',
-    marginBottom: '4px',
-    display: 'block',
+  headerLeft: {
+    display: 'flex',
+    alignItems: 'center',
   },
-  sidebarTitle: {
+  logo: {
     margin: 0,
-    fontSize: '16px',
+    fontSize: '20px',
+    fontWeight: '700',
+    color: '#FFF',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  logoIcon: {
+    fontSize: '24px',
+  },
+  adminBadge: {
+    marginLeft: '12px',
+    padding: '4px 10px',
+    backgroundColor: 'rgba(255,68,68,0.2)',
+    color: '#FF4444',
+    borderRadius: '4px',
+    fontSize: '11px',
     fontWeight: '700',
     letterSpacing: '1px',
   },
-  nav: {
-    flex: 1,
-    padding: '16px 12px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '4px',
-  },
-  navItem: {
+  headerRight: {
     display: 'flex',
     alignItems: 'center',
-    gap: '12px',
-    padding: '12px 16px',
+  },
+  backLink: {
+    color: '#888',
+    textDecoration: 'none',
+    fontSize: '14px',
+  },
+  tabs: {
+    display: 'flex',
+    gap: '8px',
+    padding: '16px 32px',
+    borderBottom: '1px solid rgba(255,255,255,0.06)',
+  },
+  tab: {
+    padding: '12px 24px',
     border: 'none',
     borderRadius: '8px',
-    background: 'transparent',
-    color: '#666',
-    fontSize: '13px',
+    backgroundColor: 'transparent',
+    color: '#888',
+    fontSize: '14px',
+    fontWeight: '500',
     cursor: 'pointer',
-    textAlign: 'left',
-    transition: 'all 0.15s',
+    transition: 'all 0.2s',
   },
-  navItemActive: {
+  tabActive: {
     backgroundColor: 'rgba(255,255,255,0.08)',
     color: '#FFF',
   },
-  navIcon: {
-    fontSize: '16px',
-  },
-  navLabel: {},
-  sidebarFooter: {
-    padding: '20px',
-    borderTop: '1px solid rgba(255,255,255,0.06)',
-  },
-  backLink: {
-    color: '#666',
-    fontSize: '12px',
-    textDecoration: 'none',
-  },
-
-  // Main
   main: {
-    flex: 1,
-    marginLeft: '220px',
-    display: 'flex',
-    flexDirection: 'column',
+    padding: '32px',
+    maxWidth: '1400px',
+    margin: '0 auto',
   },
-  topBar: {
+  loading: {
+    textAlign: 'center',
+    padding: '48px',
+    color: '#666',
+  },
+  sectionHeader: {
     display: 'flex',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '20px 32px',
-    borderBottom: '1px solid rgba(255,255,255,0.06)',
-    backgroundColor: '#0D0D0F',
-    position: 'sticky',
-    top: 0,
-    zIndex: 10,
+    marginBottom: '24px',
   },
-  pageTitle: {
+  sectionTitle: {
     margin: 0,
-    fontSize: '18px',
-    fontWeight: '600',
-  },
-  systemControls: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '24px',
-  },
-  indicator: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-  },
-  indicatorLabel: {
-    fontSize: '10px',
-    color: '#555',
-    letterSpacing: '1px',
-  },
-  indicatorValue: {
-    fontSize: '14px',
+    fontSize: '20px',
     fontWeight: '600',
     color: '#FFF',
   },
-  modeButton: {
-    padding: '10px 20px',
+  addButton: {
+    padding: '12px 24px',
+    border: 'none',
+    borderRadius: '8px',
+    backgroundColor: '#00D26A',
+    color: '#000',
+    fontSize: '14px',
+    fontWeight: '600',
+    cursor: 'pointer',
+  },
+  table: {
+    width: '100%',
+    borderCollapse: 'collapse',
+    backgroundColor: 'rgba(255,255,255,0.02)',
+    borderRadius: '12px',
+    overflow: 'hidden',
+  },
+  th: {
+    textAlign: 'left',
+    padding: '16px',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    color: '#888',
+    fontSize: '12px',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px',
+  },
+  tr: {
+    borderBottom: '1px solid rgba(255,255,255,0.05)',
+  },
+  td: {
+    padding: '16px',
+    fontSize: '14px',
+    color: '#CCC',
+  },
+  productName: {
+    fontWeight: '600',
+    color: '#FFF',
+  },
+  productUrl: {
+    fontSize: '12px',
+    color: '#666',
+    marginTop: '4px',
+  },
+  statusToggle: {
+    padding: '6px 12px',
     border: 'none',
     borderRadius: '6px',
     fontSize: '12px',
-    fontWeight: '600',
+    fontWeight: '500',
     cursor: 'pointer',
-    fontFamily: 'inherit',
   },
-  content: {
-    flex: 1,
-    padding: '32px',
-    overflow: 'auto',
-  },
-
-  // Overview
-  overviewGrid: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '24px',
-  },
-  statsRow: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(4, 1fr)',
-    gap: '16px',
-  },
-  statCard: {
-    padding: '24px',
-    borderRadius: '12px',
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    border: '1px solid rgba(255,255,255,0.06)',
-    textAlign: 'center',
-  },
-  statValue: {
-    fontSize: '32px',
-    fontWeight: '700',
-    display: 'block',
-  },
-  statLabel: {
-    fontSize: '12px',
-    color: '#666',
-    marginTop: '8px',
-    display: 'block',
-  },
-  card: {
-    padding: '24px',
-    borderRadius: '12px',
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    border: '1px solid rgba(255,255,255,0.06)',
-  },
-  cardTitle: {
-    margin: '0 0 20px',
-    fontSize: '14px',
-    fontWeight: '600',
-    color: '#888',
-  },
-  healthBars: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '12px',
-  },
-  healthRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '16px',
-  },
-  healthName: {
-    width: '120px',
-    fontSize: '13px',
-  },
-  healthBarContainer: {
-    flex: 1,
-    height: '8px',
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderRadius: '4px',
-    overflow: 'hidden',
-  },
-  healthBar: {
-    height: '100%',
-    borderRadius: '4px',
-    transition: 'width 0.3s',
-  },
-  healthValue: {
-    width: '45px',
-    fontSize: '13px',
-    textAlign: 'right',
-  },
-  healthStatus: {
-    width: '70px',
-    fontSize: '11px',
-    fontWeight: '600',
-    textAlign: 'right',
-  },
-  recentLogs: {
-    display: 'flex',
-    flexDirection: 'column',
-  },
-  logRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '16px',
-    padding: '12px 0',
-    borderBottom: '1px solid rgba(255,255,255,0.04)',
-  },
-  logType: {
-    fontSize: '11px',
-    fontWeight: '700',
-    width: '70px',
-  },
-  logMessage: {
-    flex: 1,
-    fontSize: '12px',
-    color: '#AAA',
-  },
-  logTime: {
-    fontSize: '11px',
-    color: '#555',
-  },
-
-  // Profiles
-  profilesGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-    gap: '16px',
-  },
-  profileCard: {
-    padding: '24px',
-    borderRadius: '12px',
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    border: '1px solid rgba(255,255,255,0.06)',
-  },
-  profileHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: '16px',
-  },
-  profileName: {
-    margin: 0,
-    fontSize: '15px',
-    fontWeight: '600',
-  },
-  profileStatus: {
-    fontSize: '11px',
-    fontWeight: '700',
-  },
-  profileHealth: {
-    marginBottom: '20px',
-  },
-  healthBarLarge: {
-    height: '6px',
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderRadius: '3px',
-    overflow: 'hidden',
-    marginBottom: '6px',
-  },
-  healthBarFill: {
-    height: '100%',
-    borderRadius: '3px',
-  },
-  healthPercent: {
-    fontSize: '11px',
-    color: '#666',
-  },
-  profileStats: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(3, 1fr)',
-    gap: '12px',
-    marginBottom: '20px',
-  },
-  profileStat: {
-    textAlign: 'center',
-  },
-  statNum: {
-    fontSize: '20px',
-    fontWeight: '700',
-    display: 'block',
-  },
-  statLbl: {
-    fontSize: '10px',
-    color: '#666',
-  },
-  profileFooter: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: '16px',
-    borderTop: '1px solid rgba(255,255,255,0.06)',
-  },
-  lastUsed: {
-    fontSize: '11px',
-    color: '#555',
-  },
-  profileActions: {
+  actions: {
     display: 'flex',
     gap: '8px',
   },
   actionBtn: {
     padding: '6px 12px',
-    border: '1px solid rgba(255,255,255,0.15)',
+    border: '1px solid rgba(255,255,255,0.1)',
     borderRadius: '4px',
-    background: 'transparent',
-    color: '#888',
-    fontSize: '11px',
+    backgroundColor: 'transparent',
+    color: '#AAA',
+    fontSize: '12px',
     cursor: 'pointer',
-    fontFamily: 'inherit',
   },
-  actionBtnDanger: {
+  deleteBtn: {
     borderColor: 'rgba(255,68,68,0.3)',
     color: '#FF4444',
   },
-  addProfileCard: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: '40px',
-    borderRadius: '12px',
-    border: '2px dashed rgba(255,255,255,0.1)',
-    background: 'transparent',
-    color: '#555',
-    fontSize: '13px',
-    cursor: 'pointer',
-  },
-  addIcon: {
-    fontSize: '32px',
-    marginBottom: '8px',
-  },
-
-  // Retailers
-  retailersList: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '12px',
-  },
-  retailerCard: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '20px 24px',
-    borderRadius: '12px',
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    border: '1px solid rgba(255,255,255,0.06)',
-    transition: 'opacity 0.2s',
-  },
-  retailerInfo: {},
-  retailerName: {
-    margin: 0,
-    fontSize: '15px',
-    fontWeight: '600',
-  },
-  retailerMeta: {
-    display: 'flex',
-    gap: '16px',
-    marginTop: '4px',
-    fontSize: '12px',
-    color: '#666',
-  },
-  retailerControls: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '16px',
-  },
-  configBtn: {
-    padding: '8px 16px',
-    border: '1px solid rgba(255,255,255,0.15)',
-    borderRadius: '6px',
-    background: 'transparent',
+  totalSpent: {
+    fontSize: '14px',
     color: '#888',
-    fontSize: '12px',
-    cursor: 'pointer',
-    fontFamily: 'inherit',
   },
-  toggle: {
-    width: '44px',
-    height: '24px',
-    borderRadius: '12px',
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    cursor: 'pointer',
-    position: 'relative',
-    transition: 'all 0.2s',
+  totalAmount: {
+    color: '#00D26A',
+    fontWeight: '700',
+    fontSize: '18px',
   },
-  toggleOn: {
-    backgroundColor: '#00D26A',
-  },
-  toggleKnob: {
-    position: 'absolute',
-    top: '3px',
-    left: '3px',
-    width: '18px',
-    height: '18px',
-    borderRadius: '50%',
-    backgroundColor: '#FFF',
-    transition: 'all 0.2s',
-  },
-  toggleKnobOn: {
-    left: '23px',
-  },
-
-  // Settings
-  settingsGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(2, 1fr)',
-    gap: '24px',
-  },
-  settingsSection: {
-    padding: '24px',
-    borderRadius: '12px',
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    border: '1px solid rgba(255,255,255,0.06)',
-  },
-  settingsSectionTitle: {
-    margin: '0 0 20px',
-    fontSize: '13px',
-    fontWeight: '600',
-    color: '#888',
-    letterSpacing: '0.5px',
-  },
-  settingRow: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: '16px',
-  },
-  settingInfo: {
-    display: 'flex',
-    flexDirection: 'column',
-  },
-  settingLabel: {
-    fontSize: '13px',
-    color: '#FFF',
-  },
-  settingDesc: {
+  timeText: {
     fontSize: '11px',
     color: '#555',
     marginTop: '2px',
   },
-  numberInput: {
-    width: '80px',
-    padding: '8px 12px',
+  orderNumber: {
+    padding: '4px 8px',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderRadius: '4px',
+    fontSize: '11px',
+    fontFamily: 'monospace',
+  },
+  statusBadge: {
+    padding: '4px 10px',
+    borderRadius: '12px',
+    fontSize: '11px',
+    fontWeight: '500',
+  },
+  settingsContainer: {
+    maxWidth: '600px',
+  },
+  settingGroup: {
+    marginBottom: '32px',
+  },
+  settingLabel: {
+    display: 'block',
+    fontSize: '14px',
+    fontWeight: '600',
+    color: '#FFF',
+    marginBottom: '8px',
+  },
+  settingHelp: {
+    margin: '8px 0 0',
+    fontSize: '12px',
+    color: '#666',
+  },
+  input: {
+    width: '100%',
+    maxWidth: '300px',
+    padding: '12px 16px',
     border: '1px solid rgba(255,255,255,0.15)',
-    borderRadius: '6px',
+    borderRadius: '8px',
     backgroundColor: 'rgba(255,255,255,0.05)',
     color: '#FFF',
-    fontSize: '13px',
-    textAlign: 'center',
-    fontFamily: 'inherit',
+    fontSize: '14px',
+    outline: 'none',
   },
-  toggleSettingRow: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: '16px',
-  },
-  toggleSettingLabel: {
-    fontSize: '13px',
-    color: '#CCC',
-  },
-  dangerBtn: {
-    display: 'block',
-    width: '100%',
-    padding: '12px',
-    marginBottom: '8px',
-    border: '1px solid rgba(255,68,68,0.3)',
-    borderRadius: '6px',
-    background: 'transparent',
-    color: '#FF4444',
-    fontSize: '12px',
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-  },
-
-  // Logs
-  logsContainer: {},
-  logsHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: '20px',
-  },
-  logFilters: {
-    display: 'flex',
-    gap: '4px',
-  },
-  filterBtn: {
-    padding: '8px 14px',
+  bigToggle: {
+    padding: '16px 32px',
     border: 'none',
-    borderRadius: '6px',
-    background: 'transparent',
-    color: '#666',
-    fontSize: '11px',
+    borderRadius: '8px',
+    fontSize: '16px',
+    fontWeight: '700',
+    color: '#FFF',
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+  },
+  saveButton: {
+    padding: '14px 32px',
+    border: 'none',
+    borderRadius: '8px',
+    backgroundColor: '#00D26A',
+    color: '#000',
+    fontSize: '14px',
     fontWeight: '600',
     cursor: 'pointer',
-    fontFamily: 'inherit',
   },
-  filterBtnActive: {
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    color: '#FFF',
-  },
-  exportBtn: {
-    padding: '8px 16px',
-    border: '1px solid rgba(255,255,255,0.15)',
-    borderRadius: '6px',
-    background: 'transparent',
-    color: '#888',
-    fontSize: '12px',
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-  },
-  logsTable: {
-    borderRadius: '12px',
-    backgroundColor: 'rgba(255,255,255,0.02)',
-    border: '1px solid rgba(255,255,255,0.06)',
-    overflow: 'hidden',
-  },
-  logEntry: {
+  modalOverlay: {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.8)',
     display: 'flex',
     alignItems: 'center',
-    gap: '16px',
-    padding: '14px 20px',
-    borderBottom: '1px solid rgba(255,255,255,0.04)',
+    justifyContent: 'center',
+    zIndex: 1000,
   },
-  logEntryType: {
-    padding: '4px 10px',
-    borderRadius: '4px',
-    fontSize: '10px',
-    fontWeight: '700',
-    minWidth: '65px',
-    textAlign: 'center',
+  modal: {
+    width: '500px',
+    maxWidth: '90vw',
+    backgroundColor: '#1a1a1b',
+    borderRadius: '16px',
+    padding: '32px',
+    border: '1px solid rgba(255,255,255,0.1)',
   },
-  logEntryMessage: {
+  modalTitle: {
+    margin: '0 0 24px',
+    fontSize: '20px',
+    fontWeight: '600',
+    color: '#FFF',
+  },
+  formGroup: {
+    marginBottom: '20px',
     flex: 1,
-    fontSize: '12px',
+  },
+  formRow: {
+    display: 'flex',
+    gap: '16px',
+  },
+  formLabel: {
+    display: 'block',
+    fontSize: '13px',
+    fontWeight: '500',
     color: '#AAA',
+    marginBottom: '8px',
   },
-  logEntryProfile: {
-    padding: '3px 8px',
-    borderRadius: '4px',
-    backgroundColor: 'rgba(255,215,0,0.1)',
-    fontSize: '10px',
-    color: '#FFD700',
+  formInput: {
+    width: '100%',
+    padding: '12px 16px',
+    border: '1px solid rgba(255,255,255,0.15)',
+    borderRadius: '8px',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    color: '#FFF',
+    fontSize: '14px',
+    outline: 'none',
   },
-  logEntryTime: {
-    fontSize: '11px',
-    color: '#555',
-    minWidth: '60px',
-    textAlign: 'right',
+  checkboxLabel: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    fontSize: '14px',
+    color: '#AAA',
+    cursor: 'pointer',
+  },
+  modalActions: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    gap: '12px',
+    marginTop: '24px',
+    paddingTop: '24px',
+    borderTop: '1px solid rgba(255,255,255,0.1)',
+  },
+  cancelBtn: {
+    padding: '12px 24px',
+    border: '1px solid rgba(255,255,255,0.15)',
+    borderRadius: '8px',
+    backgroundColor: 'transparent',
+    color: '#AAA',
+    fontSize: '14px',
+    cursor: 'pointer',
+  },
+  submitBtn: {
+    padding: '12px 24px',
+    border: 'none',
+    borderRadius: '8px',
+    backgroundColor: '#00D26A',
+    color: '#000',
+    fontSize: '14px',
+    fontWeight: '600',
+    cursor: 'pointer',
   },
 };
