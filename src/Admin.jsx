@@ -14,6 +14,8 @@ export default function AdminPanel() {
   const [loading, setLoading] = useState(true);
   const [editingProduct, setEditingProduct] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [keywords, setKeywords] = useState([]);
+  const [showAddKeyword, setShowAddKeyword] = useState(false);
   const [engineStatus, setEngineStatus] = useState('stopped');
   const [engineStats, setEngineStats] = useState({});
   const [engineLoading, setEngineLoading] = useState(false);
@@ -58,17 +60,55 @@ export default function AdminPanel() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [productsRes, purchasesRes] = await Promise.all([
+      const [productsRes, purchasesRes, keywordsRes] = await Promise.all([
         supabase.from('products').select('*').order('created_at', { ascending: false }),
-        supabase.from('purchases').select('*').order('purchased_at', { ascending: false }).limit(50)
+        supabase.from('purchases').select('*').order('purchased_at', { ascending: false }).limit(50),
+        supabase.from('keywords').select('*').order('created_at', { ascending: false }).catch(() => ({ data: [] }))
       ]);
 
       if (productsRes.data) setProducts(productsRes.data);
       if (purchasesRes.data) setPurchases(purchasesRes.data);
+      if (keywordsRes?.data) setKeywords(keywordsRes.data);
     } catch (err) {
       console.error('Error fetching data:', err);
     }
     setLoading(false);
+  };
+
+  const addKeyword = async (term, maxPrice, retailers) => {
+    const { data, error } = await supabase
+      .from('keywords')
+      .insert([{
+        term,
+        max_price: maxPrice || null,
+        retailers: retailers?.length ? JSON.stringify(retailers) : null,
+        auto_activate: true,
+        is_active: true
+      }])
+      .select();
+    if (!error) {
+      setKeywords([...(data || []), ...keywords]);
+      setShowAddKeyword(false);
+    }
+  };
+
+  const deleteKeyword = async (id) => {
+    await supabase.from('keywords').delete().eq('id', id);
+    setKeywords(keywords.filter(k => k.id !== id));
+  };
+
+  const toggleKeyword = async (id, isActive) => {
+    await supabase.from('keywords').update({ is_active: !isActive }).eq('id', id);
+    setKeywords(keywords.map(k => k.id === id ? { ...k, is_active: !isActive } : k));
+  };
+
+  const triggerDiscovery = async () => {
+    try {
+      await fetch('https://dropwatch-production-b65d.up.railway.app/discover', { method: 'POST' });
+      alert('Discovery triggered! Check back in a minute.');
+    } catch (err) {
+      console.error('Discovery trigger failed:', err);
+    }
   };
 
   const deleteProduct = async (id) => {
@@ -136,7 +176,7 @@ export default function AdminPanel() {
 
       {/* Tabs */}
       <div style={styles.tabs}>
-        {['products', 'purchases', 'settings'].map(tab => (
+        {['products', 'keywords', 'purchases', 'settings'].map(tab => (
           <button
             key={tab}
             style={{
@@ -146,6 +186,7 @@ export default function AdminPanel() {
             onClick={() => setActiveTab(tab)}
           >
             {tab === 'products' && '📦 '}
+            {tab === 'keywords' && '🔍 '}
             {tab === 'purchases' && '🛒 '}
             {tab === 'settings' && '⚙️ '}
             {tab.charAt(0).toUpperCase() + tab.slice(1)}
@@ -170,6 +211,17 @@ export default function AdminPanel() {
             )}
             {activeTab === 'purchases' && (
               <PurchasesTab purchases={purchases} />
+            )}
+            {activeTab === 'keywords' && (
+              <KeywordsTab 
+                keywords={keywords}
+                onAdd={addKeyword}
+                onDelete={deleteKeyword}
+                onToggle={toggleKeyword}
+                onDiscover={triggerDiscovery}
+                showAddForm={showAddKeyword}
+                setShowAddForm={setShowAddKeyword}
+              />
             )}
             {activeTab === 'settings' && (
               <SettingsTab settings={settings} setSettings={setSettings} />
@@ -522,6 +574,177 @@ function ProductModal({ product, onSave, onClose }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // STYLES
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// KEYWORDS TAB — Product Discovery Configuration
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function KeywordsTab({ keywords, onAdd, onDelete, onToggle, onDiscover, showAddForm, setShowAddForm }) {
+  const [newTerm, setNewTerm] = useState('');
+  const [newMaxPrice, setNewMaxPrice] = useState('');
+  const [newRetailers, setNewRetailers] = useState([]);
+  const allRetailers = ['Target', 'Walmart', 'Pokemon Center', 'Best Buy', 'GameStop', 'Amazon'];
+
+  const handleAdd = () => {
+    if (!newTerm.trim()) return;
+    onAdd(newTerm.trim(), parseFloat(newMaxPrice) || null, newRetailers);
+    setNewTerm('');
+    setNewMaxPrice('');
+    setNewRetailers([]);
+  };
+
+  const toggleRetailer = (r) => {
+    setNewRetailers(prev => prev.includes(r) ? prev.filter(x => x !== r) : [...prev, r]);
+  };
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+        <div>
+          <h2 style={{ margin: 0, color: '#FFF', fontSize: '20px' }}>Product Discovery Keywords</h2>
+          <p style={{ margin: '4px 0 0', color: '#888', fontSize: '13px' }}>
+            The engine searches all retailers for these keywords and auto-adds matching products
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button
+            onClick={onDiscover}
+            style={{ padding: '10px 16px', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', backgroundColor: 'transparent', color: '#AAA', fontSize: '13px', cursor: 'pointer' }}
+          >
+            🔎 Run Discovery Now
+          </button>
+          <button
+            onClick={() => setShowAddForm(true)}
+            style={{ padding: '10px 20px', border: 'none', borderRadius: '8px', backgroundColor: '#00D26A', color: '#000', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}
+          >
+            + Add Keyword
+          </button>
+        </div>
+      </div>
+
+      {/* Add Keyword Form */}
+      {showAddForm && (
+        <div style={{ backgroundColor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', padding: '20px', marginBottom: '20px' }}>
+          <h3 style={{ color: '#FFF', margin: '0 0 16px', fontSize: '16px' }}>New Keyword</h3>
+          
+          <div style={{ marginBottom: '12px' }}>
+            <label style={{ display: 'block', color: '#AAA', fontSize: '12px', marginBottom: '6px' }}>Search Term</label>
+            <input
+              type="text"
+              value={newTerm}
+              onChange={e => setNewTerm(e.target.value)}
+              placeholder="e.g. Prismatic Evolutions ETB"
+              style={{ width: '100%', padding: '10px 14px', backgroundColor: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#FFF', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }}
+            />
+          </div>
+
+          <div style={{ marginBottom: '12px' }}>
+            <label style={{ display: 'block', color: '#AAA', fontSize: '12px', marginBottom: '6px' }}>Max Price (optional)</label>
+            <input
+              type="number"
+              value={newMaxPrice}
+              onChange={e => setNewMaxPrice(e.target.value)}
+              placeholder="e.g. 54.99"
+              style={{ width: '200px', padding: '10px 14px', backgroundColor: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', color: '#FFF', fontSize: '14px', outline: 'none' }}
+            />
+          </div>
+
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{ display: 'block', color: '#AAA', fontSize: '12px', marginBottom: '8px' }}>Retailers (leave empty for all)</label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+              {allRetailers.map(r => (
+                <button
+                  key={r}
+                  onClick={() => toggleRetailer(r)}
+                  style={{
+                    padding: '6px 14px',
+                    borderRadius: '20px',
+                    border: newRetailers.includes(r) ? '1px solid #00D26A' : '1px solid rgba(255,255,255,0.15)',
+                    backgroundColor: newRetailers.includes(r) ? 'rgba(0,210,106,0.15)' : 'transparent',
+                    color: newRetailers.includes(r) ? '#00D26A' : '#AAA',
+                    fontSize: '13px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  {r}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button onClick={handleAdd} style={{ padding: '10px 20px', border: 'none', borderRadius: '8px', backgroundColor: '#00D26A', color: '#000', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}>
+              Save Keyword
+            </button>
+            <button onClick={() => setShowAddForm(false)} style={{ padding: '10px 20px', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', backgroundColor: 'transparent', color: '#AAA', fontSize: '14px', cursor: 'pointer' }}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Keywords List */}
+      {keywords.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '60px 20px', color: '#666' }}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>🔍</div>
+          <h3 style={{ color: '#AAA', margin: '0 0 8px' }}>No keywords set</h3>
+          <p style={{ fontSize: '14px' }}>Add keywords like "Prismatic Evolutions ETB" to auto-discover products</p>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {keywords.map(kw => (
+            <div
+              key={kw.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '16px 20px',
+                backgroundColor: 'rgba(255,255,255,0.03)',
+                border: '1px solid rgba(255,255,255,0.06)',
+                borderRadius: '10px'
+              }}
+            >
+              <div style={{ flex: 1 }}>
+                <div style={{ color: '#FFF', fontSize: '15px', fontWeight: '500' }}>
+                  {kw.term}
+                </div>
+                <div style={{ color: '#888', fontSize: '12px', marginTop: '4px' }}>
+                  {kw.max_price ? `Max $${kw.max_price}` : 'No price limit'}
+                  {kw.retailers ? ` · ${JSON.parse(kw.retailers).join(', ')}` : ' · All retailers'}
+                  {kw.last_searched ? ` · Last searched ${new Date(kw.last_searched).toLocaleString()}` : ''}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <button
+                  onClick={() => onToggle(kw.id, kw.is_active)}
+                  style={{
+                    padding: '4px 12px',
+                    borderRadius: '12px',
+                    border: 'none',
+                    backgroundColor: kw.is_active ? 'rgba(0,210,106,0.15)' : 'rgba(255,255,255,0.05)',
+                    color: kw.is_active ? '#00D26A' : '#666',
+                    fontSize: '12px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  {kw.is_active ? '● Active' : '○ Paused'}
+                </button>
+                <button
+                  onClick={() => onDelete(kw.id)}
+                  style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: '18px', padding: '4px' }}
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const styles = {
   app: {
