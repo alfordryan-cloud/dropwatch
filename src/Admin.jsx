@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
+import { engine } from './engineClient';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DROPWATCH ADMIN PANEL
@@ -13,8 +14,11 @@ export default function AdminPanel() {
   const [loading, setLoading] = useState(true);
   const [editingProduct, setEditingProduct] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [engineStatus, setEngineStatus] = useState('stopped');
+  const [engineStats, setEngineStats] = useState({});
+  const [engineLoading, setEngineLoading] = useState(false);
   const [settings, setSettings] = useState({
-    systemActive: true,
+    systemActive: false,
     checkInterval: 30,
     maxQuantityPerProduct: 2,
     alertEmail: 'ryan@radical.company'
@@ -22,7 +26,34 @@ export default function AdminPanel() {
 
   useEffect(() => {
     fetchData();
+    fetchEngineStatus();
   }, []);
+
+  const fetchEngineStatus = async () => {
+    const status = await engine.getStatus();
+    setEngineStatus(status.status);
+    setEngineStats(status.stats || {});
+    setSettings(prev => ({ ...prev, systemActive: status.status === 'running' }));
+  };
+
+  const toggleEngine = async () => {
+    setEngineLoading(true);
+    try {
+      if (settings.systemActive) {
+        await engine.stop();
+      } else {
+        await engine.start();
+      }
+      // Wait a moment then refresh status
+      setTimeout(async () => {
+        await fetchEngineStatus();
+        setEngineLoading(false);
+      }, 1000);
+    } catch (err) {
+      console.error('Engine toggle failed:', err);
+      setEngineLoading(false);
+    }
+  };
 
   const fetchData = async () => {
     setLoading(true);
@@ -313,9 +344,9 @@ function SettingsTab({ settings, setSettings }) {
             ...styles.bigToggle,
             backgroundColor: settings.systemActive ? '#00D26A' : '#333'
           }}
-          onClick={() => setSettings({ ...settings, systemActive: !settings.systemActive })}
+          onClick={() => toggleEngine()}
         >
-          {settings.systemActive ? '● ACTIVE' : '○ PAUSED'}
+          {engineLoading ? '⏳ ...' : settings.systemActive ? '● ACTIVE' : '○ PAUSED'}
         </button>
         <p style={styles.settingHelp}>
           {settings.systemActive 

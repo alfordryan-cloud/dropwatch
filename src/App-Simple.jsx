@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
+import { engine } from './engineClient';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DROPWATCH - DASHBOARD WITH SUPABASE
@@ -16,12 +17,23 @@ export default function Dashboard() {
   const [isSearching, setIsSearching] = useState(false);
   const [searchResults, setSearchResults] = useState([]);
   const [timePeriod, setTimePeriod] = useState('today');
-  const [systemActive, setSystemActive] = useState(true);
+  const [systemActive, setSystemActive] = useState(false);
+  const [engineStats, setEngineStats] = useState({});
 
-  // Fetch data from Supabase
+  // Fetch data from Supabase + Engine status
   useEffect(() => {
     fetchData();
+    fetchEngineStatus();
+    // Poll engine status every 30 seconds
+    const interval = setInterval(fetchEngineStatus, 30000);
+    return () => clearInterval(interval);
   }, []);
+
+  const fetchEngineStatus = async () => {
+    const status = await engine.getStatus();
+    setSystemActive(status.status === 'running');
+    setEngineStats(status.stats || {});
+  };
 
   const fetchData = async () => {
     try {

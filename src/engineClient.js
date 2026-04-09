@@ -1,5 +1,7 @@
+// ═══════════════════════════════════════════════════════════════════════════════
 // DROPWATCH ENGINE CLIENT
 // Connects frontend to the Railway backend engine
+// ═══════════════════════════════════════════════════════════════════════════════
 
 const ENGINE_URL = import.meta.env.VITE_ENGINE_URL || 'https://dropwatch-production-b65d.up.railway.app';
 
