@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
 import { engine } from './engineClient';
+import EngineStatus from './components/EngineStatus';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DROPWATCH - DASHBOARD WITH SUPABASE
@@ -11,7 +12,7 @@ export default function Dashboard() {
   const [view, setView] = useState('dashboard');
   const [products, setProducts] = useState([]);
   const [purchases, setPurchases] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
@@ -239,6 +240,7 @@ export default function Dashboard() {
         </div>
       )}
 
+                <EngineStatus />
       {/* Main Content */}
       <main style={styles.main}>
         {view === 'dashboard' && (
