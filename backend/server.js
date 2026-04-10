@@ -382,18 +382,18 @@ async function checkKeyword(keyword, proxyConfig) {
       const adapter = RETAILERS[retailerKey];
       if (!adapter) continue;
       try {
-        await logActivity('check', `Checking ${adapter.name} for: ${keyword.name}`, { keyword: keyword.name, retailer: retailerKey, priority: keyword.priority });
-        const inStock = await adapter.checkStock(page, keyword.name, keyword.max_price);
+        await logActivity('check', `Checking ${adapter.name} for: ${keyword.term}`, { keyword: keyword.term, retailer: retailerKey, priority: keyword.priority });
+        const inStock = await adapter.checkStock(page, keyword.term, keyword.max_price);
         engineState.checksCompleted++;
         if (inStock.length > 0) {
-          await logActivity('check', `✅ IN STOCK at ${adapter.name}: ${inStock[0].title} — $${inStock[0].price}`, { keyword: keyword.name, retailer: retailerKey, products: inStock });
+          await logActivity('check', `✅ IN STOCK at ${adapter.name}: ${inStock[0].title} — $${inStock[0].price}`, { keyword: keyword.term, retailer: retailerKey, products: inStock });
           results.push(...inStock.map(p => ({ ...p, retailer: retailerKey })));
         } else {
-          await logActivity('check', `❌ Out of stock at ${adapter.name} for: ${keyword.name}`, { keyword: keyword.name, retailer: retailerKey });
+          await logActivity('check', `❌ Out of stock at ${adapter.name} for: ${keyword.term}`, { keyword: keyword.term, retailer: retailerKey });
         }
       } catch (err) {
         engineState.errors++;
-        await logActivity('error', `Error checking ${adapter.name}: ${err.message}`, { keyword: keyword.name, retailer: retailerKey, error: err.message });
+        await logActivity('error', `Error checking ${adapter.name}: ${err.message}`, { keyword: keyword.term, retailer: retailerKey, error: err.message });
       }
     }
     const purchaseEnabled = engineState.settings?.auto_purchase_enabled;
@@ -484,7 +484,7 @@ app.post('/resume', (req, res) => { engineState.paused = false; logActivity('eng
 app.post('/reload-settings', async (req, res) => { await loadSettings(); res.json({ loaded: true, settings: engineState.settings }); });
 app.get('/status', (req, res) => { res.json({ engine: engineState.running ? 'running' : 'stopped', paused: engineState.paused, checks: engineState.checksCompleted, purchases: engineState.purchasesCompleted, errors: engineState.errors, uptime: process.uptime() }); });
 app.post('/check/:keywordId', async (req, res) => {
-  const { data, error } = await supabase.from('keywords').select('*').eq('id', req.params.keywordId).single();
+  const { data, error } = await supabase.from('keywords').select('*').eq('id', req.params.keywordId).maybeSingle();
   if (error || !data) return res.status(404).json({ error: 'Keyword not found' });
   const results = await checkKeyword(data, buildProxyConfig(engineState.settings));
   res.json({ found: results.length, results });
