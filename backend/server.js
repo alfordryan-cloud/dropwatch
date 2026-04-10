@@ -382,18 +382,18 @@ async function checkKeyword(keyword, proxyConfig) {
       const adapter = RETAILERS[retailerKey];
       if (!adapter) continue;
       try {
-        await logActivity('check', `Checking ${adapter.name} for: ${keyword.keyword}`, { keyword: keyword.keyword, retailer: retailerKey, priority: keyword.priority });
-        const inStock = await adapter.checkStock(page, keyword.keyword, keyword.max_price);
+        await logActivity('check', `Checking ${adapter.name} for: ${keyword.name}`, { keyword: keyword.name, retailer: retailerKey, priority: keyword.priority });
+        const inStock = await adapter.checkStock(page, keyword.name, keyword.max_price);
         engineState.checksCompleted++;
         if (inStock.length > 0) {
-          await logActivity('check', `✅ IN STOCK at ${adapter.name}: ${inStock[0].title} — $${inStock[0].price}`, { keyword: keyword.keyword, retailer: retailerKey, products: inStock });
+          await logActivity('check', `✅ IN STOCK at ${adapter.name}: ${inStock[0].title} — $${inStock[0].price}`, { keyword: keyword.name, retailer: retailerKey, products: inStock });
           results.push(...inStock.map(p => ({ ...p, retailer: retailerKey })));
         } else {
-          await logActivity('check', `❌ Out of stock at ${adapter.name} for: ${keyword.keyword}`, { keyword: keyword.keyword, retailer: retailerKey });
+          await logActivity('check', `❌ Out of stock at ${adapter.name} for: ${keyword.name}`, { keyword: keyword.name, retailer: retailerKey });
         }
       } catch (err) {
         engineState.errors++;
-        await logActivity('error', `Error checking ${adapter.name}: ${err.message}`, { keyword: keyword.keyword, retailer: retailerKey, error: err.message });
+        await logActivity('error', `Error checking ${adapter.name}: ${err.message}`, { keyword: keyword.name, retailer: retailerKey, error: err.message });
       }
     }
     const purchaseEnabled = engineState.settings?.auto_purchase_enabled;
