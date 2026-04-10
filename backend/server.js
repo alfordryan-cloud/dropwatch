@@ -95,7 +95,7 @@ async function loadSettings() {
     const { data, error } = await supabase
       .from('settings')
       .select('*')
-      .single();
+      .maybeSingle();
     if (error) throw error;
     engineState.settings = data || {};
     engineState.lastSettingsLoad = new Date().toISOString();
@@ -360,7 +360,7 @@ const RETAILERS = {
 async function loadKeywords() {
   const { data, error } = await supabase
     .from('keywords')
-    .select('*, retailer_accounts(*)')
+    .select('*')
     .eq('active', true)
     .order('priority', { ascending: true });
   if (error) { console.error('[Keywords] Failed to load:', error.message); return []; }
