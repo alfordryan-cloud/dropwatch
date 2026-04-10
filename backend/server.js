@@ -487,7 +487,7 @@ function startWithWatchdog() {
 
 // ─── REST API ─────────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', running: engineState.running, paused: engineState.paused, startedAt: engineState.startedAt, checksCompleted: engineState.checksCompleted, purchasesCompleted: engineState.purchasesCompleted, errors: engineState.errors, currentProduct: engineState.currentProduct, lastSettingsLoad: engineState.lastSettingsLoad, uptime: process.uptime(), memoryMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) });
+  res.json({ status: 'ok', online: true, running: engineState.running, paused: engineState.paused, startedAt: engineState.startedAt, checksCompleted: engineState.checksCompleted, purchasesCompleted: engineState.purchasesCompleted, errors: engineState.errors, currentProduct: engineState.currentProduct, lastSettingsLoad: engineState.lastSettingsLoad, uptime: process.uptime(), memoryMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) });
 });
 app.post('/pause', (req, res) => { engineState.paused = true; logActivity('engine', '⏸ Engine paused via API'); res.json({ paused: true }); });
 app.post('/resume', (req, res) => { engineState.paused = false; logActivity('engine', '▶ Engine resumed via API'); res.json({ paused: false }); });
