@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from './supabaseClient';
 import { engine } from './engineClient';
+import ActivityTab from './components/ActivityTab';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DROPWATCH ADMIN PANEL v3.0
