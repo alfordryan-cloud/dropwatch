@@ -240,7 +240,6 @@ export default function Dashboard() {
         </div>
       )}
 
-                <EngineStatus />
       {/* Main Content */}
       <main style={styles.main}>
         {view === 'dashboard' && (
