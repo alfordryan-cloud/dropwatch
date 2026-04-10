@@ -68,3 +68,15 @@ export default {
   checkKeyword,
   pollEngineHealth,
 };
+
+// Backward-compatible named export for existing imports
+// e.g. import { engine } from './engineClient'
+export const engine = {
+  getEngineHealth,
+  getEngineStatus,
+  pauseEngine,
+  resumeEngine,
+  reloadSettings,
+  checkKeyword,
+  pollEngineHealth,
+};
