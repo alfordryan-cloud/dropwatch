@@ -1,5 +1,5 @@
 /**
- * DROPWATCH Engine v2.2
+ * DROPWATCH Engine v2.3
  * Phase 2: Stealth Layer + Always-On Monitoring
  *
  * Features:
