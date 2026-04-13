@@ -6,12 +6,16 @@
 const ENGINE_URL = import.meta.env.VITE_ENGINE_URL || 'https://dropwatch-production-b65d.up.railway.app';
 
 async function request(path, method = 'GET', body = null) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
   const opts = {
     method,
     headers: { 'Content-Type': 'application/json' },
+    signal: ctrl.signal,
   };
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(`${ENGINE_URL}${path}`, opts);
+  clearTimeout(timer);
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Engine API error ${res.status}: ${text}`);
