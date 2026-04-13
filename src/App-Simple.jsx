@@ -225,10 +225,7 @@ export default function Dashboard() {
           >
             🔄
           </button>
-          <div style={styles.systemStatus}>
-            <span style={{...styles.statusDot, backgroundColor: systemActive ? '#00D26A' : '#666'}} />
-            <span style={styles.statusText}>{systemActive ? 'Active' : 'Paused'}</span>
-          </div>
+          <EngineStatus />
         </div>
       </header>
 
