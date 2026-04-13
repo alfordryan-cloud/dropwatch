@@ -1,7 +1,7 @@
 {
   "name": "dropwatch-engine",
-  "version": "2.0.0",
-  "description": "DROPWATCH automated purchasing engine — Phase 2",
+  "version": "3.0.0",
+  "description": "DROPWATCH automated purchasing engine — Phase 2: Tiered API + Playwright",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
