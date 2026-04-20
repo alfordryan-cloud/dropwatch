@@ -1,0 +1,19 @@
+node_modules/
+dist/
+build/
+.DS_Store
+*.log
+
+# Env files (contain secrets — never commit)
+.env
+.env.local
+.env.*.local
+
+# Editor / tooling
+.claude/
+.vscode/
+.idea/
+
+# Supabase CLI
+supabase/.temp/
+supabase/.branches/
