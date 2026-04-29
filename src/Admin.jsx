@@ -15,7 +15,11 @@ const RETAILERS = [
 ];
 
 export default function AdminPanel() {
-  const [activeTab, setActiveTab] = useState(window.location.hash.replace('#', '') || 'keywords');
+  // Default to Find SKUs (the primary tool now); fall back if hash points
+  // to a removed tab.
+  const validTabs = new Set(['findskus', 'accounts']);
+  const initialTab = window.location.hash.replace('#', '') || 'findskus';
+  const [activeTab, setActiveTab] = useState(validTabs.has(initialTab) ? initialTab : 'findskus');
   const [products, setProducts] = useState([]);
   const [purchases, setPurchases] = useState([]);
   const [keywords, setKeywords] = useState([]);
@@ -77,16 +81,15 @@ export default function AdminPanel() {
 
   const refresh = () => fetchData();
 
+  // Stellar AIO is the active retailer-buying engine (Walmart smoke test
+  // passed 2026-04-29, Target standing-watch live). Pre-Stellar tabs
+  // (keywords, products, drops, batch, activity, purchases, settings) were
+  // for the dropwatch-engine workers we decommissioned and would mislead.
+  // Keep only what the active workflow uses: Find SKUs (sourcing) and
+  // Accounts (read-only sanity check on stored sessions).
   const tabs = [
-    { id: 'keywords', icon: '🔍', label: 'Keywords' },
-    { id: 'products', icon: '📦', label: 'Products' },
     { id: 'findskus', icon: '🎯', label: 'Find SKUs' },
-    { id: 'drops', icon: '🔴', label: 'Drops' },
     { id: 'accounts', icon: '👤', label: 'Accounts' },
-    { id: 'batch', icon: '⚡', label: 'Batch Import' },
-    { id: 'activity', icon: '📡', label: 'Activity' },
-    { id: 'purchases', icon: '💰', label: 'Purchases' },
-    { id: 'settings', icon: '⚙️', label: 'Settings' },
   ];
 
   return (

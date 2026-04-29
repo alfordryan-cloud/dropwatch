@@ -217,6 +217,22 @@ export const ENGINE_BASE_URL = ENGINE_URL;
 
 // ─── SKU Finder ──────────────────────────────────────────────────────────
 
+// SKU finder calls go to Vercel serverless functions on the SAME origin as
+// the dashboard (relative URLs), not the Railway engine. Self-contained.
+async function vercelPost(path, body) {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let msg = '';
+    try { msg = (await res.json())?.error || ''; } catch { msg = await res.text(); }
+    throw new Error(`API ${res.status}: ${String(msg).slice(0, 200)}`);
+  }
+  return res.json();
+}
+
 /**
  * Keyword search Target / Walmart for sealed sports + TCG product.
  * @param {{retailer:'target'|'walmart', keyword:string, maxResults?:number,
@@ -224,12 +240,12 @@ export const ENGINE_BASE_URL = ENGINE_URL;
  * @returns {Promise<{retailer,keyword,count,items:Array<{sku,title,price,inStock,url}>}>}
  */
 export async function searchSkus(body) {
-  return request('/api/search-skus', 'POST', body);
+  return vercelPost('/api/search-skus', body);
 }
 
 /**
  * Lookup a single SKU (or product URL) — returns canonical title/price/in-stock.
  */
 export async function lookupSku(body) {
-  return request('/api/lookup-sku', 'POST', body);
+  return vercelPost('/api/lookup-sku', body);
 }
