@@ -249,3 +249,37 @@ export async function searchSkus(body) {
 export async function lookupSku(body) {
   return vercelPost('/api/lookup-sku', body);
 }
+
+// ─── Watchlist (Supabase products table via Vercel functions) ────────────
+
+export async function getWatchlist() {
+  const r = await fetch('/api/watchlist');
+  if (!r.ok) throw new Error(`watchlist GET ${r.status}`);
+  return r.json();
+}
+
+export async function addToWatchlist(item) {
+  return vercelPost('/api/watchlist', item);
+}
+
+export async function updateWatchlistItem(id, fields) {
+  const r = await fetch(`/api/watchlist?id=${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(fields),
+  });
+  if (!r.ok) {
+    let msg = ''; try { msg = (await r.json())?.error || ''; } catch {}
+    throw new Error(`watchlist PATCH ${r.status}: ${msg}`);
+  }
+  return r.json();
+}
+
+export async function removeFromWatchlist(id) {
+  const r = await fetch(`/api/watchlist?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!r.ok) {
+    let msg = ''; try { msg = (await r.json())?.error || ''; } catch {}
+    throw new Error(`watchlist DELETE ${r.status}: ${msg}`);
+  }
+  return r.json();
+}

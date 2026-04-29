@@ -59,11 +59,20 @@ async function targetSearch(keyword, opts = {}) {
     const inStock = p?.fulfillment?.is_out_of_stock_in_all_store_locations === false
       || p?.fulfillment?.shipping_options?.availability_status === 'IN_STOCK'
       || p?.availability === 'IN_STOCK';
+    // 1P (Target-owned) vs 3P (marketplace seller). Target's RedSky exposes
+    // marketplace sellers via item.product_vendors[].vendor_name (e.g.
+    // "BlueProton", "Nationwide Distributor"). Target-owned products have
+    // no vendor entry. Source: empirical inspection of plp_search_v2 responses.
+    const vendors = item?.product_vendors || [];
+    const firstParty = vendors.length === 0
+      || vendors.every(v => /^target/i.test(v?.vendor_name || ''));
     return {
       sku: String(tcin),
       title: String(title || '').replace(/;/g, ',').trim(),
       price: price != null ? Number(price) : null,
       inStock: !!inStock,
+      firstParty,
+      sellerName: vendors[0]?.vendor_name || (firstParty ? 'Target' : null),
       url: tcin ? `https://www.target.com/p/-/A-${tcin}` : null,
     };
   }).filter(p => p.sku);
@@ -124,11 +133,18 @@ async function walmartSearch(keyword, opts = {}) {
         const priceRaw = it?.priceInfo?.linePrice || it?.priceInfo?.currentPrice?.priceString || it?.price;
         const price = (typeof priceRaw === 'string' ? Number(priceRaw.replace?.(/[^\d.]/g, '')) : Number(priceRaw)) || null;
         const inStock = (it?.availabilityStatusV2?.value || it?.availabilityStatus || '').toUpperCase() === 'IN_STOCK';
+        // 1P (Walmart-owned) vs 3P (marketplace). Walmart's GraphQL response
+        // exposes sellerName per item — anything other than "Walmart.com" /
+        // "Walmart Inc" is a marketplace listing.
+        const sellerName = it?.sellerName || '';
+        const firstParty = /^walmart(\.com| inc)?$/i.test(sellerName) || sellerName === '';
         products.push({
           sku: String(sku),
           title,
           price,
           inStock,
+          firstParty,
+          sellerName: sellerName || (firstParty ? 'Walmart' : null),
           url: `https://www.walmart.com/ip/${sku}`,
         });
       }
@@ -209,7 +225,9 @@ function applyFilters(items, opts) {
   const minP = opts.minPrice != null ? Number(opts.minPrice) : 0;
   const maxP = opts.maxPrice != null ? Number(opts.maxPrice) : Infinity;
   const inStockOnly = !!opts.inStockOnly;
+  const firstPartyOnly = opts.firstPartyOnly !== false; // default ON — drop marketplace scalpers
   return items.filter(p => {
+    if (firstPartyOnly && p.firstParty === false) return false;
     if (inStockOnly && p.inStock === false) return false;
     if (p.price != null && p.price < minP) return false;
     if (p.price != null && p.price > maxP) return false;

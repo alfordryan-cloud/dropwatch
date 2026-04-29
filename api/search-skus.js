@@ -7,7 +7,7 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'POST only' });
   }
-  const { retailer, keyword, maxResults, minPrice, maxPrice, inStockOnly } = req.body || {};
+  const { retailer, keyword, maxResults, minPrice, maxPrice, inStockOnly, firstPartyOnly } = req.body || {};
   if (!retailer || !keyword) {
     return res.status(400).json({ error: 'retailer and keyword required' });
   }
@@ -17,6 +17,7 @@ export default async function handler(req, res) {
       minPrice: minPrice != null ? Number(minPrice) : undefined,
       maxPrice: maxPrice != null ? Number(maxPrice) : undefined,
       inStockOnly: !!inStockOnly,
+      firstPartyOnly: firstPartyOnly !== false,
     });
     res.status(200).json({ retailer, keyword, count: items.length, items });
   } catch (e) {

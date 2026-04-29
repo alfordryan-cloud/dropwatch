@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from './supabaseClient';
-import { engine, searchSkus, lookupSku } from './engineClient';
+import { engine, searchSkus, lookupSku, getWatchlist, addToWatchlist, updateWatchlistItem, removeFromWatchlist } from './engineClient';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DROPWATCH ADMIN PANEL v4.2
@@ -17,7 +17,7 @@ const RETAILERS = [
 export default function AdminPanel() {
   // Default to Find SKUs (the primary tool now); fall back if hash points
   // to a removed tab.
-  const validTabs = new Set(['findskus', 'accounts']);
+  const validTabs = new Set(['findskus', 'watchlist', 'accounts']);
   const initialTab = window.location.hash.replace('#', '') || 'findskus';
   const [activeTab, setActiveTab] = useState(validTabs.has(initialTab) ? initialTab : 'findskus');
   const [products, setProducts] = useState([]);
@@ -89,6 +89,7 @@ export default function AdminPanel() {
   // Accounts (read-only sanity check on stored sessions).
   const tabs = [
     { id: 'findskus', icon: '🎯', label: 'Find SKUs' },
+    { id: 'watchlist', icon: '📋', label: 'Watchlist' },
     { id: 'accounts', icon: '👤', label: 'Accounts' },
   ];
 
@@ -136,6 +137,7 @@ export default function AdminPanel() {
             {activeTab === 'keywords' && <KeywordsTab keywords={keywords} onRefresh={refresh} />}
             {activeTab === 'products' && <ProductsTab products={products} accounts={accounts} onRefresh={refresh} />}
             {activeTab === 'findskus' && <FindSkusTab onRefresh={refresh} />}
+            {activeTab === 'watchlist' && <WatchlistTab />}
             {activeTab === 'drops' && <DropsTab drops={drops} onRefresh={fetchDrops} products={products} />}
             {activeTab === 'accounts' && <AccountsTab accounts={accounts} onRefresh={refresh} />}
             {activeTab === 'batch' && <BatchImportTab onRefresh={refresh} />}
@@ -1633,9 +1635,13 @@ function FindSkusTab({ onRefresh }) {
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
   const [inStockOnly, setInStockOnly] = useState(false);
+  const [firstPartyOnly, setFirstPartyOnly] = useState(true); // default ON — drop scalpers
   const [buffer, setBuffer] = useState('10'); // % over retail for Stellar MaxPrice
+  const [defaultQty, setDefaultQty] = useState('2'); // pre-fill on Save → Watchlist
   const [items, setItems] = useState([]);
   const [selected, setSelected] = useState(new Set()); // SKUs checked for paste-block
+  const [savingSku, setSavingSku] = useState(null); // sku currently being saved
+  const [savedSkus, setSavedSkus] = useState(new Set()); // sku → saved badge
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState('');
   const [hint, setHint] = useState(''); // transient status
@@ -1661,6 +1667,7 @@ function FindSkusTab({ onRefresh }) {
       if (minPrice) body.minPrice = Number(minPrice);
       if (maxPrice) body.maxPrice = Number(maxPrice);
       if (inStockOnly) body.inStockOnly = true;
+      body.firstPartyOnly = firstPartyOnly;
       const resp = await searchSkus(body);
       setItems(resp.items || []);
       // pre-select all results so the paste-block is one click away
@@ -1735,6 +1742,36 @@ function FindSkusTab({ onRefresh }) {
     { label: 'Panini Prizm', kw: 'panini prizm', min: '15', max: '200' },
     { label: 'Ascended Heroes', kw: 'ascended heroes', min: '15', max: '300' },
   ];
+
+  const saveOne = async (p) => {
+    setSavingSku(p.sku);
+    setError('');
+    try {
+      const buf = (Number(buffer) || 0) / 100;
+      const cap = p.price != null ? Math.ceil(p.price * (1 + buf)) : null;
+      const body = {
+        retailer,
+        sku: p.sku,
+        name: p.title || '(untitled)',
+        url: p.url || null,
+        last_price: p.price ?? null,
+        target_price: cap,
+        max_quantity: defaultQty ? Number(defaultQty) : 2,
+        in_stock: p.inStock === true,
+        is_active: true,
+        status: 'watching',
+      };
+      if (retailer === 'target') body.tcin = p.sku;
+      await addToWatchlist(body);
+      setSavedSkus(prev => new Set(prev).add(p.sku));
+      setHint(`Saved ${p.sku} to watchlist.`);
+      setTimeout(() => setHint(''), 2500);
+    } catch (e) {
+      setError(`Save failed: ${e.message || e}`);
+    } finally {
+      setSavingSku(null);
+    }
+  };
 
   return (
     <div>
@@ -1811,8 +1848,19 @@ function FindSkusTab({ onRefresh }) {
                 onChange={e => setBuffer(e.target.value)} placeholder="10" />
               <span style={S.hint}>MaxPrice in paste-block = ceil(retail × (1 + buffer))</span>
             </div>
+            <div style={S.formGroup}>
+              <label style={S.label}>Default Qty (Save)</label>
+              <input style={S.input} type="number" value={defaultQty}
+                onChange={e => setDefaultQty(e.target.value)} placeholder="2" />
+              <span style={S.hint}>Walmart cap=5, Target cap=2</span>
+            </div>
             <div style={{ ...S.formGroup, flex: '0 0 auto', alignSelf: 'flex-end' }}>
               <label style={{ ...S.label, display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                <input type="checkbox" checked={firstPartyOnly}
+                  onChange={e => setFirstPartyOnly(e.target.checked)} />
+                Retailer-owned only (no 3P)
+              </label>
+              <label style={{ ...S.label, display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '6px' }}>
                 <input type="checkbox" checked={inStockOnly}
                   onChange={e => setInStockOnly(e.target.checked)} />
                 In-stock only
@@ -1881,7 +1929,9 @@ function FindSkusTab({ onRefresh }) {
                   <th style={{ padding: '12px 14px', textAlign: 'left', color: '#888', fontWeight: '500' }}>Title</th>
                   <th style={{ padding: '12px 14px', textAlign: 'right', color: '#888', fontWeight: '500' }}>Retail</th>
                   <th style={{ padding: '12px 14px', textAlign: 'right', color: '#888', fontWeight: '500' }}>Stellar Cap</th>
+                  <th style={{ padding: '12px 14px', textAlign: 'center', color: '#888', fontWeight: '500' }}>Seller</th>
                   <th style={{ padding: '12px 14px', textAlign: 'center', color: '#888', fontWeight: '500' }}>Stock</th>
+                  <th style={{ padding: '12px 14px', textAlign: 'center', color: '#888', fontWeight: '500' }}>Save</th>
                   <th style={{ padding: '12px 14px', textAlign: 'center', color: '#888', fontWeight: '500' }}>Link</th>
                 </tr>
               </thead>
@@ -1903,8 +1953,30 @@ function FindSkusTab({ onRefresh }) {
                       <td style={{ padding: '10px 14px', textAlign: 'right', color: '#00D26A' }}>
                         {cap != null ? `$${cap}` : '—'}
                       </td>
+                      <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                        {p.firstParty === true ? (
+                          <span style={{ ...S.statusBadge, ...S.statusActive }}>1P</span>
+                        ) : p.firstParty === false ? (
+                          <span style={{ ...S.statusBadge, backgroundColor: 'rgba(239,159,39,0.15)', color: '#EF9F27' }}
+                                title={p.sellerName || '3P seller'}>3P</span>
+                        ) : '—'}
+                      </td>
                       <td style={{ padding: '10px 14px', textAlign: 'center', color: stockColor, fontWeight: '600' }}>
                         {p.inStock === true ? 'IN STOCK' : p.inStock === false ? 'out' : '—'}
+                      </td>
+                      <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                        {savedSkus.has(p.sku) ? (
+                          <span style={{ ...S.statusBadge, ...S.statusActive }}>✓ saved</span>
+                        ) : (
+                          <button
+                            style={{ ...S.btnSecondary, padding: '4px 10px', fontSize: '11px' }}
+                            disabled={savingSku === p.sku}
+                            onClick={() => saveOne(p)}
+                            title="Add to Watchlist"
+                          >
+                            {savingSku === p.sku ? '…' : '💾 Save'}
+                          </button>
+                        )}
                       </td>
                       <td style={{ padding: '10px 14px', textAlign: 'center' }}>
                         {p.url && <a href={p.url} target="_blank" rel="noreferrer" style={S.linkColor}>↗</a>}
@@ -1929,6 +2001,204 @@ function FindSkusTab({ onRefresh }) {
             </span>
           </div>
         </>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WATCHLIST TAB — saved products from Find SKUs; edit max price/qty, status, remove
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function WatchlistTab() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filterRetailer, setFilterRetailer] = useState('all');
+  const [error, setError] = useState('');
+  const [editingId, setEditingId] = useState(null);
+  const [draft, setDraft] = useState({ target_price: '', max_quantity: '', notes: '' });
+
+  const load = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const r = await getWatchlist();
+      setItems(r.items || []);
+    } catch (e) {
+      setError(e.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const startEdit = (it) => {
+    setEditingId(it.id);
+    setDraft({
+      target_price: it.target_price ?? '',
+      max_quantity: it.max_quantity ?? '',
+      notes: it.notes ?? '',
+    });
+  };
+
+  const saveEdit = async () => {
+    try {
+      const fields = {
+        target_price: draft.target_price === '' ? null : Number(draft.target_price),
+        max_quantity: draft.max_quantity === '' ? null : Number(draft.max_quantity),
+        notes: draft.notes || null,
+      };
+      await updateWatchlistItem(editingId, fields);
+      setEditingId(null);
+      await load();
+    } catch (e) {
+      setError(e.message || String(e));
+    }
+  };
+
+  const remove = async (id) => {
+    if (!confirm('Remove from watchlist?')) return;
+    try {
+      await removeFromWatchlist(id);
+      await load();
+    } catch (e) {
+      setError(e.message || String(e));
+    }
+  };
+
+  const filtered = filterRetailer === 'all'
+    ? items
+    : items.filter(it => it.retailer === filterRetailer);
+
+  const statusColor = (s, inStock) => {
+    if (inStock) return { bg: 'rgba(0,210,106,0.15)', color: '#00D26A', label: 'IN STOCK' };
+    if (s === 'purchased') return { bg: 'rgba(0,210,106,0.25)', color: '#00D26A', label: 'PURCHASED' };
+    if (s === 'detected') return { bg: 'rgba(239,159,39,0.15)', color: '#EF9F27', label: 'DETECTED' };
+    if (s === 'inventory_loaded') return { bg: 'rgba(161,124,246,0.15)', color: '#A17CF6', label: 'INV LOADED' };
+    return { bg: 'rgba(255,255,255,0.05)', color: '#888', label: 'WATCHING' };
+  };
+
+  return (
+    <div>
+      <div style={S.sectionHeader}>
+        <div>
+          <h2 style={S.sectionTitle}>Watchlist</h2>
+          <p style={S.sectionSub}>
+            Products saved from Find SKUs. Set a max price + target quantity per item.
+            Polling worker (next deploy) will track inventory + alert on stock changes.
+          </p>
+        </div>
+        <div>
+          <button style={S.btnSecondary} onClick={load} disabled={loading}>
+            {loading ? '…' : 'Refresh'}
+          </button>
+        </div>
+      </div>
+
+      <div style={S.filterBar}>
+        <select style={S.input} value={filterRetailer} onChange={e => setFilterRetailer(e.target.value)}>
+          <option value="all">All retailers ({items.length})</option>
+          <option value="target">Target ({items.filter(i => i.retailer === 'target').length})</option>
+          <option value="walmart">Walmart ({items.filter(i => i.retailer === 'walmart').length})</option>
+        </select>
+      </div>
+
+      {error && (
+        <div style={{ padding: '12px 16px', backgroundColor: 'rgba(226,75,74,0.1)', border: '1px solid rgba(226,75,74,0.3)', borderRadius: '8px', color: '#E24B4A', fontSize: '13px', marginBottom: '12px' }}>
+          {error}
+        </div>
+      )}
+
+      {!loading && filtered.length === 0 && (
+        <div style={S.emptyState}>
+          <p style={{ color: '#888', margin: 0 }}>No products on the watchlist.</p>
+          <p style={{ color: '#666', margin: '8px 0 0', fontSize: '12px' }}>
+            Use the <strong>Find SKUs</strong> tab to search and click <strong>💾 Save</strong> to add products here.
+          </p>
+        </div>
+      )}
+
+      {filtered.length > 0 && (
+        <div style={{ overflowX: 'auto', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.06)' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+                <th style={{ padding: '12px 14px', textAlign: 'left', color: '#888', fontWeight: '500' }}>Retailer</th>
+                <th style={{ padding: '12px 14px', textAlign: 'left', color: '#888', fontWeight: '500' }}>SKU</th>
+                <th style={{ padding: '12px 14px', textAlign: 'left', color: '#888', fontWeight: '500' }}>Title</th>
+                <th style={{ padding: '12px 14px', textAlign: 'right', color: '#888', fontWeight: '500' }}>Last $</th>
+                <th style={{ padding: '12px 14px', textAlign: 'right', color: '#888', fontWeight: '500' }}>Max $</th>
+                <th style={{ padding: '12px 14px', textAlign: 'right', color: '#888', fontWeight: '500' }}>Qty</th>
+                <th style={{ padding: '12px 14px', textAlign: 'center', color: '#888', fontWeight: '500' }}>Status</th>
+                <th style={{ padding: '12px 14px', textAlign: 'center', color: '#888', fontWeight: '500' }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(it => {
+                const sc = statusColor(it.status, it.in_stock);
+                const isEditing = editingId === it.id;
+                return (
+                  <tr key={it.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                    <td style={{ padding: '10px 14px', color: '#AAA' }}>
+                      {it.retailer}
+                    </td>
+                    <td style={{ padding: '10px 14px', fontFamily: 'monospace', color: '#AAA' }}>
+                      {it.url ? <a href={it.url} target="_blank" rel="noreferrer" style={S.linkColor}>{it.sku}</a> : it.sku}
+                    </td>
+                    <td style={{ padding: '10px 14px', color: '#FFF' }}>
+                      {it.name || '(no title)'}
+                    </td>
+                    <td style={{ padding: '10px 14px', textAlign: 'right', color: '#FFF' }}>
+                      {it.last_price != null ? `$${Number(it.last_price).toFixed(2)}` : '—'}
+                    </td>
+                    <td style={{ padding: '10px 14px', textAlign: 'right' }}>
+                      {isEditing ? (
+                        <input style={{ ...S.inputSmall, width: '70px', textAlign: 'right' }}
+                          type="number" value={draft.target_price}
+                          onChange={e => setDraft(d => ({ ...d, target_price: e.target.value }))} />
+                      ) : (
+                        <span style={{ color: '#00D26A' }}>
+                          {it.target_price != null ? `$${it.target_price}` : '—'}
+                        </span>
+                      )}
+                    </td>
+                    <td style={{ padding: '10px 14px', textAlign: 'right' }}>
+                      {isEditing ? (
+                        <input style={{ ...S.inputSmall, width: '50px', textAlign: 'right' }}
+                          type="number" value={draft.max_quantity}
+                          onChange={e => setDraft(d => ({ ...d, max_quantity: e.target.value }))} />
+                      ) : (
+                        <span style={{ color: '#FFF' }}>{it.max_quantity ?? '—'}</span>
+                      )}
+                    </td>
+                    <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                      <span style={{ ...S.statusBadge, backgroundColor: sc.bg, color: sc.color }}>
+                        {sc.label}
+                      </span>
+                    </td>
+                    <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                      {isEditing ? (
+                        <>
+                          <button style={{ ...S.btnPrimary, padding: '4px 10px', fontSize: '11px', marginRight: '4px' }}
+                            onClick={saveEdit}>Save</button>
+                          <button style={{ ...S.btnSecondary, padding: '4px 10px', fontSize: '11px' }}
+                            onClick={() => setEditingId(null)}>Cancel</button>
+                        </>
+                      ) : (
+                        <>
+                          <button style={{ ...S.btnSecondary, padding: '4px 10px', fontSize: '11px', marginRight: '4px' }}
+                            onClick={() => startEdit(it)}>Edit</button>
+                          <button style={S.deleteBtn} onClick={() => remove(it.id)} title="Remove">×</button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
