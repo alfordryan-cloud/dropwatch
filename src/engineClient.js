@@ -214,3 +214,22 @@ export default engine;
 
 // Expose URL for debugging
 export const ENGINE_BASE_URL = ENGINE_URL;
+
+// ─── SKU Finder ──────────────────────────────────────────────────────────
+
+/**
+ * Keyword search Target / Walmart for sealed sports + TCG product.
+ * @param {{retailer:'target'|'walmart', keyword:string, maxResults?:number,
+ *          minPrice?:number, maxPrice?:number, inStockOnly?:boolean}} body
+ * @returns {Promise<{retailer,keyword,count,items:Array<{sku,title,price,inStock,url}>}>}
+ */
+export async function searchSkus(body) {
+  return request('/api/search-skus', 'POST', body);
+}
+
+/**
+ * Lookup a single SKU (or product URL) — returns canonical title/price/in-stock.
+ */
+export async function lookupSku(body) {
+  return request('/api/lookup-sku', 'POST', body);
+}

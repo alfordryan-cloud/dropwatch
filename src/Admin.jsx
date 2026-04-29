@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from './supabaseClient';
-import { engine } from './engineClient';
+import { engine, searchSkus, lookupSku } from './engineClient';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DROPWATCH ADMIN PANEL v4.2
@@ -80,6 +80,7 @@ export default function AdminPanel() {
   const tabs = [
     { id: 'keywords', icon: '🔍', label: 'Keywords' },
     { id: 'products', icon: '📦', label: 'Products' },
+    { id: 'findskus', icon: '🎯', label: 'Find SKUs' },
     { id: 'drops', icon: '🔴', label: 'Drops' },
     { id: 'accounts', icon: '👤', label: 'Accounts' },
     { id: 'batch', icon: '⚡', label: 'Batch Import' },
@@ -131,6 +132,7 @@ export default function AdminPanel() {
           <>
             {activeTab === 'keywords' && <KeywordsTab keywords={keywords} onRefresh={refresh} />}
             {activeTab === 'products' && <ProductsTab products={products} accounts={accounts} onRefresh={refresh} />}
+            {activeTab === 'findskus' && <FindSkusTab onRefresh={refresh} />}
             {activeTab === 'drops' && <DropsTab drops={drops} onRefresh={fetchDrops} products={products} />}
             {activeTab === 'accounts' && <AccountsTab accounts={accounts} onRefresh={refresh} />}
             {activeTab === 'batch' && <BatchImportTab onRefresh={refresh} />}
@@ -1616,6 +1618,318 @@ function parseKeywordTerm(term) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // STYLES
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FIND SKUS TAB — keyword search Target / Walmart, build Stellar Tag paste-block
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function FindSkusTab({ onRefresh }) {
+  const [retailer, setRetailer] = useState('target');
+  const [keyword, setKeyword] = useState('');
+  const [maxResults, setMaxResults] = useState('25');
+  const [minPrice, setMinPrice] = useState('');
+  const [maxPrice, setMaxPrice] = useState('');
+  const [inStockOnly, setInStockOnly] = useState(false);
+  const [buffer, setBuffer] = useState('10'); // % over retail for Stellar MaxPrice
+  const [items, setItems] = useState([]);
+  const [selected, setSelected] = useState(new Set()); // SKUs checked for paste-block
+  const [searching, setSearching] = useState(false);
+  const [error, setError] = useState('');
+  const [hint, setHint] = useState(''); // transient status
+
+  // URL lookup mode (single product → one row)
+  const [urlInput, setUrlInput] = useState('');
+
+  const runSearch = async () => {
+    if (!keyword.trim()) {
+      setError('Enter a keyword first.');
+      return;
+    }
+    setError('');
+    setSearching(true);
+    setItems([]);
+    setSelected(new Set());
+    try {
+      const body = {
+        retailer,
+        keyword: keyword.trim(),
+        maxResults: maxResults ? Number(maxResults) : 25,
+      };
+      if (minPrice) body.minPrice = Number(minPrice);
+      if (maxPrice) body.maxPrice = Number(maxPrice);
+      if (inStockOnly) body.inStockOnly = true;
+      const resp = await searchSkus(body);
+      setItems(resp.items || []);
+      // pre-select all results so the paste-block is one click away
+      setSelected(new Set((resp.items || []).map(p => p.sku)));
+    } catch (e) {
+      setError(e.message || String(e));
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const runLookup = async () => {
+    if (!urlInput.trim()) {
+      setError('Paste a Target or Walmart product URL.');
+      return;
+    }
+    setError('');
+    setSearching(true);
+    try {
+      const item = await lookupSku({ url: urlInput.trim() });
+      setItems([item]);
+      setSelected(new Set([item.sku]));
+    } catch (e) {
+      setError(e.message || String(e));
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const toggle = (sku) => {
+    const next = new Set(selected);
+    next.has(sku) ? next.delete(sku) : next.add(sku);
+    setSelected(next);
+  };
+
+  const toggleAll = () => {
+    if (selected.size === items.length) setSelected(new Set());
+    else setSelected(new Set(items.map(p => p.sku)));
+  };
+
+  const stellarBlock = (() => {
+    const buf = (Number(buffer) || 0) / 100;
+    return items
+      .filter(p => selected.has(p.sku))
+      .map(p => {
+        const cap = p.price != null ? Math.ceil(p.price * (1 + buf)) : '';
+        return `${p.sku};${p.title};${cap}`;
+      })
+      .join('\n');
+  })();
+
+  const copyBlock = async () => {
+    if (!stellarBlock) {
+      setHint('Select at least one row first.');
+      setTimeout(() => setHint(''), 2500);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(stellarBlock);
+      setHint(`Copied ${selected.size} row(s). Paste into Stellar → Tags → Manage SKUs.`);
+      setTimeout(() => setHint(''), 4000);
+    } catch (e) {
+      setHint(`Copy failed: ${e.message}. Use the textarea below.`);
+      setTimeout(() => setHint(''), 4000);
+    }
+  };
+
+  const presets = [
+    { label: 'Pokemon TCG sealed', kw: 'pokemon tcg', min: '15', max: '200' },
+    { label: 'Topps Chrome', kw: '2025 topps chrome', min: '15', max: '200' },
+    { label: 'Bowman 2026', kw: 'bowman 2026', min: '15', max: '200' },
+    { label: 'Panini Prizm', kw: 'panini prizm', min: '15', max: '200' },
+    { label: 'Ascended Heroes', kw: 'ascended heroes', min: '15', max: '300' },
+  ];
+
+  return (
+    <div>
+      <div style={S.sectionHeader}>
+        <div>
+          <h2 style={S.sectionTitle}>Find SKUs</h2>
+          <p style={S.sectionSub}>
+            Keyword-search Target (RedSky) or Walmart (via Bright Data Web Unlocker) for sealed sports + TCG product.
+            Filter, then copy a Stellar-ready paste-block.
+          </p>
+        </div>
+      </div>
+
+      {/* Form: keyword search */}
+      <div style={S.formCard}>
+        <div style={S.formGrid}>
+          <div style={S.formRow}>
+            <div style={{ ...S.formGroup, flex: '0 0 auto' }}>
+              <label style={S.label}>Retailer</label>
+              <div style={S.chipGroup}>
+                {['target', 'walmart'].map(r => (
+                  <button
+                    key={r}
+                    style={{ ...S.chip, ...(retailer === r ? S.chipActive : {}) }}
+                    onClick={() => setRetailer(r)}
+                  >
+                    {r === 'target' ? '🎯 Target' : '🛒 Walmart'}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{ ...S.formGroup, flex: 3 }}>
+              <label style={S.label}>Keyword</label>
+              <input
+                style={S.input}
+                placeholder='e.g. "ascended heroes" or "topps chrome 2025"'
+                value={keyword}
+                onChange={e => setKeyword(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') runSearch(); }}
+              />
+              <div style={{ ...S.chipGroup, marginTop: '6px' }}>
+                {presets.map(p => (
+                  <button
+                    key={p.kw}
+                    style={{ ...S.chip, fontSize: '11px' }}
+                    onClick={() => { setKeyword(p.kw); setMinPrice(p.min); setMaxPrice(p.max); }}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div style={S.formRow}>
+            <div style={S.formGroup}>
+              <label style={S.label}>Max Results</label>
+              <input style={S.input} type="number" value={maxResults}
+                onChange={e => setMaxResults(e.target.value)} placeholder="25" />
+            </div>
+            <div style={S.formGroup}>
+              <label style={S.label}>Min Price ($)</label>
+              <input style={S.input} type="number" value={minPrice}
+                onChange={e => setMinPrice(e.target.value)} placeholder="(any)" />
+            </div>
+            <div style={S.formGroup}>
+              <label style={S.label}>Max Price ($)</label>
+              <input style={S.input} type="number" value={maxPrice}
+                onChange={e => setMaxPrice(e.target.value)} placeholder="(any)" />
+            </div>
+            <div style={S.formGroup}>
+              <label style={S.label}>Stellar Cap Buffer (%)</label>
+              <input style={S.input} type="number" value={buffer}
+                onChange={e => setBuffer(e.target.value)} placeholder="10" />
+              <span style={S.hint}>MaxPrice in paste-block = ceil(retail × (1 + buffer))</span>
+            </div>
+            <div style={{ ...S.formGroup, flex: '0 0 auto', alignSelf: 'flex-end' }}>
+              <label style={{ ...S.label, display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                <input type="checkbox" checked={inStockOnly}
+                  onChange={e => setInStockOnly(e.target.checked)} />
+                In-stock only
+              </label>
+            </div>
+          </div>
+
+          <div style={S.formActions}>
+            <button style={S.btnPrimary} onClick={runSearch} disabled={searching}>
+              {searching ? '…searching' : 'Search'}
+            </button>
+            <button style={S.btnSecondary} onClick={() => { setItems([]); setSelected(new Set()); setError(''); }}>
+              Clear
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Form: single URL lookup */}
+      <div style={{ ...S.formCard, marginTop: '12px' }}>
+        <div style={S.formRow}>
+          <div style={{ ...S.formGroup, flex: 4 }}>
+            <label style={S.label}>Or paste a single product URL</label>
+            <input
+              style={S.input}
+              placeholder="https://www.target.com/p/-/A-95163305  or  https://www.walmart.com/ip/19979958847"
+              value={urlInput}
+              onChange={e => setUrlInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') runLookup(); }}
+            />
+          </div>
+          <div style={{ ...S.formGroup, flex: '0 0 auto', alignSelf: 'flex-end' }}>
+            <button style={S.btnSecondary} onClick={runLookup} disabled={searching}>Lookup</button>
+          </div>
+        </div>
+      </div>
+
+      {error && (
+        <div style={{ marginTop: '12px', padding: '12px 16px', backgroundColor: 'rgba(226,75,74,0.1)', border: '1px solid rgba(226,75,74,0.3)', borderRadius: '8px', color: '#E24B4A', fontSize: '13px' }}>
+          {error}
+        </div>
+      )}
+
+      {/* Results */}
+      {items.length > 0 && (
+        <>
+          <div style={{ ...S.bulkBar, marginTop: '16px' }}>
+            <span>{selected.size} of {items.length} selected</span>
+            <button style={S.btnSecondary} onClick={toggleAll}>
+              {selected.size === items.length ? 'Deselect all' : 'Select all'}
+            </button>
+            <button style={S.btnPrimary} onClick={copyBlock}>
+              📋 Copy Stellar Tag block
+            </button>
+            {hint && <span style={{ color: '#00D26A', fontSize: '12px' }}>{hint}</span>}
+          </div>
+
+          <div style={{ overflowX: 'auto', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.06)' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+                  <th style={{ padding: '12px 14px', textAlign: 'left', color: '#888', fontWeight: '500', width: '40px' }}>
+                    <input type="checkbox" checked={selected.size === items.length && items.length > 0} onChange={toggleAll} />
+                  </th>
+                  <th style={{ padding: '12px 14px', textAlign: 'left', color: '#888', fontWeight: '500' }}>SKU</th>
+                  <th style={{ padding: '12px 14px', textAlign: 'left', color: '#888', fontWeight: '500' }}>Title</th>
+                  <th style={{ padding: '12px 14px', textAlign: 'right', color: '#888', fontWeight: '500' }}>Retail</th>
+                  <th style={{ padding: '12px 14px', textAlign: 'right', color: '#888', fontWeight: '500' }}>Stellar Cap</th>
+                  <th style={{ padding: '12px 14px', textAlign: 'center', color: '#888', fontWeight: '500' }}>Stock</th>
+                  <th style={{ padding: '12px 14px', textAlign: 'center', color: '#888', fontWeight: '500' }}>Link</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map(p => {
+                  const buf = (Number(buffer) || 0) / 100;
+                  const cap = p.price != null ? Math.ceil(p.price * (1 + buf)) : null;
+                  const stockColor = p.inStock === true ? '#00D26A' : p.inStock === false ? '#666' : '#888';
+                  return (
+                    <tr key={p.sku} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                      <td style={{ padding: '10px 14px' }}>
+                        <input type="checkbox" checked={selected.has(p.sku)} onChange={() => toggle(p.sku)} />
+                      </td>
+                      <td style={{ padding: '10px 14px', fontFamily: 'monospace', color: '#AAA' }}>{p.sku}</td>
+                      <td style={{ padding: '10px 14px', color: '#FFF' }}>{p.title || '(no title)'}</td>
+                      <td style={{ padding: '10px 14px', textAlign: 'right', color: '#FFF' }}>
+                        {p.price != null ? `$${p.price.toFixed(2)}` : '—'}
+                      </td>
+                      <td style={{ padding: '10px 14px', textAlign: 'right', color: '#00D26A' }}>
+                        {cap != null ? `$${cap}` : '—'}
+                      </td>
+                      <td style={{ padding: '10px 14px', textAlign: 'center', color: stockColor, fontWeight: '600' }}>
+                        {p.inStock === true ? 'IN STOCK' : p.inStock === false ? 'out' : '—'}
+                      </td>
+                      <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                        {p.url && <a href={p.url} target="_blank" rel="noreferrer" style={S.linkColor}>↗</a>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Read-only paste-block preview */}
+          <div style={{ marginTop: '14px' }}>
+            <label style={S.label}>Paste-block preview (copies above button writes this to clipboard)</label>
+            <textarea
+              readOnly
+              value={stellarBlock || '(select rows to preview)'}
+              style={{ ...S.input, height: '120px', fontFamily: 'monospace', fontSize: '12px', resize: 'vertical' }}
+            />
+            <span style={S.hint}>
+              Format: <code>SKU;Title;MaxPrice</code> per line. Paste into Stellar → Tags → choose retailer Tag → Manage SKUs.
+            </span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 const S = {
   container: { minHeight: '100vh', backgroundColor: '#0A0A0B', color: '#FFF', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' },
