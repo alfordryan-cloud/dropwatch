@@ -2013,6 +2013,69 @@ function FindSkusTab({ onRefresh }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Manual paste parsing — extract retailer SKU + name + price + URL from a
+// pasted Discord message (typical Poke Alerts format) on the client side.
+// Same regex as the server-side webhook receiver, kept in sync.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const PASTE_HOST_PATTERNS = {
+  walmart: /walmart\.com/i,
+  target: /target\.com/i,
+  bestbuy: /bestbuy\.com/i,
+  costco: /costco\.com/i,
+  samsclub: /samsclub\.com/i,
+  topps: /topps\.com/i,
+};
+
+function pasteExtractSku(retailer, url) {
+  if (!url) return null;
+  if (retailer === 'walmart') return url.match(/walmart\.com\/ip\/(?:[^/]+\/)?(\d+)/i)?.[1] || null;
+  if (retailer === 'target') return url.match(/target\.com\/p\/[^/]*\/-?\/?A-(\d+)/i)?.[1] || null;
+  if (retailer === 'bestbuy') return url.match(/skuId=(\d+)/i)?.[1]
+    || url.match(/bestbuy\.com\/site\/[^/]+\/(\d+)\.p/i)?.[1] || null;
+  if (retailer === 'costco') return url.match(/costco\.com\/[^/]+\.product\.(\d+)/i)?.[1]
+    || url.match(/costco\.com\/.*-(\d+)\.html/i)?.[1] || null;
+  if (retailer === 'samsclub') return url.match(/samsclub\.com\/p\/[^/]+\/P?(\d+)/i)?.[1] || null;
+  if (retailer === 'topps') return url.match(/topps\.com\/products\/([a-zA-Z0-9_\-%]+)/i)?.[1] || null;
+  return null;
+}
+
+function pasteExtractFromText(retailer, text) {
+  if (!text) return null;
+  const hostRe = PASTE_HOST_PATTERNS[retailer];
+  if (!hostRe) return null;
+  // Find URL containing retailer host
+  const urlRe = new RegExp(`https?://[^\\s)\\]>]*${hostRe.source.replace(/\\\./g, '\\.')}[^\\s)\\]>]*`, 'i');
+  const url = text.match(urlRe)?.[0]?.replace(/[.,;:!?]+$/, '') || null;
+  const sku = pasteExtractSku(retailer, url);
+  if (!sku) return null;
+
+  const priceMatch = text.match(/\$\s*(\d{1,5}(?:\.\d{2})?)/);
+  const limitMatch = text.match(/limit[:\s]+(\d+)/i) || text.match(/max[:\s]+(\d+)/i);
+
+  // Title heuristic: first non-trivial line that isn't a URL or "@everyone"
+  // or status emoji-only.
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  let name = null;
+  for (const l of lines) {
+    if (urlRe.test(l)) continue;
+    if (/^@\w+/.test(l)) continue;
+    if (/^[\W_]+$/.test(l)) continue;
+    if (l.length < 8) continue;
+    name = l.slice(0, 200);
+    break;
+  }
+
+  return {
+    sku,
+    url,
+    name,
+    price: priceMatch ? Number(priceMatch[1]) : null,
+    quantity: limitMatch ? Number(limitMatch[1]) : null,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // WATCHLIST TAB — saved products from Find SKUs; edit max price/qty, status, remove
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2023,6 +2086,51 @@ function WatchlistTab() {
   const [error, setError] = useState('');
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState({ target_price: '', max_quantity: '', notes: '' });
+
+  // Manual paste UI state
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteRetailer, setPasteRetailer] = useState('walmart');
+  const [pasteText, setPasteText] = useState('');
+  const [pastePreview, setPastePreview] = useState(null);
+  const [pasteError, setPasteError] = useState('');
+  const [pasteSaving, setPasteSaving] = useState(false);
+
+  // Re-parse preview whenever text or retailer changes
+  useEffect(() => {
+    setPasteError('');
+    if (!pasteText.trim()) { setPastePreview(null); return; }
+    const p = pasteExtractFromText(pasteRetailer, pasteText);
+    setPastePreview(p);
+    if (!p) setPasteError(`Couldn't find a ${pasteRetailer}.com product URL in the pasted text.`);
+  }, [pasteText, pasteRetailer]);
+
+  const submitPaste = async () => {
+    if (!pastePreview) return;
+    setPasteSaving(true);
+    setPasteError('');
+    try {
+      const item = {
+        retailer: pasteRetailer,
+        sku: pastePreview.sku,
+        name: pastePreview.name || null,
+        url: pastePreview.url || null,
+        last_price: pastePreview.price ?? null,
+        max_quantity: pastePreview.quantity ?? null,
+        status: 'detected',
+        in_stock: true,
+        is_active: true,
+        notes: `Manual paste from Poke Alerts\n---\n${pasteText.slice(0, 800)}`,
+      };
+      await addToWatchlist(item);
+      setPasteText('');
+      setPastePreview(null);
+      await load();
+    } catch (e) {
+      setPasteError(e.message || String(e));
+    } finally {
+      setPasteSaving(false);
+    }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -2102,11 +2210,75 @@ function WatchlistTab() {
         </div>
       </div>
 
+      {/* Manual paste from Poke Alerts (or any restock alert source) */}
+      <div style={{ ...S.settingsCard, marginBottom: '14px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
+             onClick={() => setPasteOpen(!pasteOpen)}>
+          <div>
+            <div style={{ color: '#FFF', fontSize: '14px', fontWeight: '600' }}>📋 Manual paste from alert</div>
+            <div style={{ color: '#888', fontSize: '11px' }}>Paste a Discord message (Poke Alerts, etc.) — extract retailer SKU + URL + price + name → save to watchlist.</div>
+          </div>
+          <button style={S.btnSecondary}>{pasteOpen ? 'Hide' : 'Open'}</button>
+        </div>
+
+        {pasteOpen && (
+          <div style={{ marginTop: '14px' }}>
+            <div style={{ marginBottom: '10px' }}>
+              <label style={S.label}>Retailer</label>
+              <div style={S.chipGroup}>
+                {['walmart','target','bestbuy','costco','samsclub','topps'].map(r => (
+                  <button key={r} onClick={() => setPasteRetailer(r)}
+                          style={{ ...S.chip, ...(pasteRetailer === r ? S.chipActive : {}) }}>
+                    {r.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <label style={S.label}>Pasted message text (copy from Discord)</label>
+            <textarea style={{ ...S.input, minHeight: '120px', fontFamily: 'monospace', fontSize: '12px' }}
+                      placeholder="Paste the entire Discord message here — including the embed title and URL. The form parses it client-side and shows what'll be saved."
+                      value={pasteText}
+                      onChange={e => setPasteText(e.target.value)} />
+
+            {pastePreview && (
+              <div style={{ marginTop: '12px', padding: '12px', background: 'rgba(0,210,106,0.06)', border: '1px solid rgba(0,210,106,0.2)', borderRadius: '8px' }}>
+                <div style={{ color: '#00D26A', fontSize: '12px', fontWeight: '600', marginBottom: '6px' }}>✓ Parsed</div>
+                <div style={{ color: '#FFF', fontSize: '13px' }}>{pastePreview.name || '(no name extracted)'}</div>
+                <div style={{ color: '#AAA', fontSize: '11px', marginTop: '4px', fontFamily: 'monospace' }}>
+                  {pasteRetailer} / {pastePreview.sku}
+                  {pastePreview.price != null ? ` / $${pastePreview.price}` : ''}
+                  {pastePreview.quantity != null ? ` / limit ${pastePreview.quantity}` : ''}
+                </div>
+                {pastePreview.url && <a href={pastePreview.url} target="_blank" rel="noreferrer" style={{ color: '#378ADD', fontSize: '11px', wordBreak: 'break-all' }}>{pastePreview.url}</a>}
+              </div>
+            )}
+
+            {pasteError && (
+              <div style={{ marginTop: '10px', color: '#E24B4A', fontSize: '12px' }}>{pasteError}</div>
+            )}
+
+            <div style={{ marginTop: '12px', display: 'flex', gap: '10px' }}>
+              <button style={{ ...S.btnPrimary, opacity: pastePreview && !pasteSaving ? 1 : 0.4, cursor: pastePreview && !pasteSaving ? 'pointer' : 'not-allowed' }}
+                      onClick={submitPaste}
+                      disabled={!pastePreview || pasteSaving}>
+                {pasteSaving ? 'Saving…' : '💾 Save to watchlist'}
+              </button>
+              <button style={S.btnSecondary} onClick={() => { setPasteText(''); setPastePreview(null); setPasteError(''); }}>Clear</button>
+            </div>
+          </div>
+        )}
+      </div>
+
       <div style={S.filterBar}>
         <select style={S.input} value={filterRetailer} onChange={e => setFilterRetailer(e.target.value)}>
           <option value="all">All retailers ({items.length})</option>
-          <option value="target">Target ({items.filter(i => i.retailer === 'target').length})</option>
           <option value="walmart">Walmart ({items.filter(i => i.retailer === 'walmart').length})</option>
+          <option value="target">Target ({items.filter(i => i.retailer === 'target').length})</option>
+          <option value="bestbuy">Best Buy ({items.filter(i => i.retailer === 'bestbuy').length})</option>
+          <option value="costco">Costco ({items.filter(i => i.retailer === 'costco').length})</option>
+          <option value="samsclub">Sam's Club ({items.filter(i => i.retailer === 'samsclub').length})</option>
+          <option value="topps">Topps ({items.filter(i => i.retailer === 'topps').length})</option>
         </select>
       </div>
 
