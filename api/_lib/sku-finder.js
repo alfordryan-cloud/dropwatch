@@ -97,9 +97,9 @@ async function targetLookup(sku) {
   };
 }
 
-// ─── Walmart (via Bright Data Web Unlocker) ──────────────────────────────
+// ─── Bright Data Web Unlocker fetch (shared) ──────────────────────────────
 
-async function walmartFetchHtml(url) {
+async function bdUnlockerFetch(url) {
   const apiKey = process.env.BRIGHTDATA_API_KEY;
   const zone = process.env.BRIGHTDATA_UNLOCKER_ZONE || 'dropwatchv2';
   if (!apiKey) throw new Error('BRIGHTDATA_API_KEY not set');
@@ -113,8 +113,14 @@ async function walmartFetchHtml(url) {
   });
   if (!r.ok) throw new Error(`Web Unlocker ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const wrapper = await r.json();
+  if (wrapper.headers?.['x-brd-error-code']) {
+    throw new Error(`Web Unlocker page_block: ${wrapper.headers['x-brd-error-code']}`);
+  }
   return wrapper.body || '';
 }
+
+// alias for backward compat — walmart code still calls walmartFetchHtml
+const walmartFetchHtml = bdUnlockerFetch;
 
 async function walmartSearch(keyword, opts = {}) {
   const html = await walmartFetchHtml(`https://www.walmart.com/search?q=${encodeURIComponent(keyword)}`);
@@ -189,17 +195,105 @@ async function walmartLookup(sku) {
   }
 }
 
+// ─── Topps (Shopify-based, via Bright Data Web Unlocker) ──────────────────
+
+// Topps uses URL-slug-based products, not numeric SKUs. We treat the slug as
+// the canonical "sku" for storage. Categories: mlb, nfl, nba, ufc, bowman, etc.
+// Topps sells sports cards; not Pokemon. Source: walmart/target/topps all
+// proxy through the same dropwatchv2 Web Unlocker zone (Ron Azu enabled
+// Cloudflare bypass for topps.com on 2026-04-29 per support ticket).
+
+const TOPPS_VALID_COLLECTIONS = new Set([
+  'mlb', 'nfl', 'nba', 'ufc', 'bowman', 'topps-now', 'all', 'wwe', 'star-wars', 'formula-1', 'soccer',
+]);
+
+async function toppsSearch(keyword, opts = {}) {
+  // If keyword matches a known collection (mlb, nfl, nba, etc.), browse the
+  // collection. Otherwise hit the search endpoint.
+  const lc = (keyword || '').toLowerCase().trim();
+  const url = TOPPS_VALID_COLLECTIONS.has(lc)
+    ? `https://www.topps.com/collections/${lc}`
+    : `https://www.topps.com/search?q=${encodeURIComponent(keyword)}`;
+  const html = await bdUnlockerFetch(url);
+  return parseToppsHtml(html, opts.maxResults || 25);
+}
+
+function parseToppsHtml(html, maxResults) {
+  // Topps is Shopify-based. Product cards have <a href="/products/SLUG">.
+  // Extract by scanning for the product anchor + nearby title and price.
+  const products = [];
+  const seen = new Set();
+  // Match: href="/products/<slug>" and capture nearby text (greedy bounded)
+  const linkRe = /href="\/products\/([a-zA-Z0-9_\-%]+)"/g;
+  let m;
+  while ((m = linkRe.exec(html)) && products.length < maxResults) {
+    const slug = m[1];
+    if (seen.has(slug)) continue;
+    seen.add(slug);
+    // Look ~400 chars after for title/price
+    const window = html.substring(m.index, m.index + 800);
+    const titleMatch = window.match(/<(?:span|h\d|div)[^>]*>([^<]{8,140})<\/(?:span|h\d|div)>/);
+    const priceMatch = window.match(/\$\s*(\d{1,5}(?:\.\d{2})?)/);
+    const soldOutMatch = /sold\s*out|out\s+of\s+stock/i.test(window);
+    products.push({
+      sku: slug,
+      title: (titleMatch?.[1] || decodeURIComponent(slug.replace(/-/g, ' '))).trim().replace(/;/g, ',').slice(0, 200),
+      price: priceMatch ? Number(priceMatch[1]) : null,
+      inStock: !soldOutMatch,
+      firstParty: true, // Topps sells direct only — no 3P marketplace
+      sellerName: 'Topps',
+      url: `https://www.topps.com/products/${slug}`,
+    });
+  }
+  return products;
+}
+
+async function toppsLookup(slug) {
+  // slug is the URL-encoded path component, e.g. "cody-bellinger-2026-mlb-topps-now-card-96"
+  const url = slug.startsWith('http') ? slug : `https://www.topps.com/products/${slug}`;
+  const html = await bdUnlockerFetch(url);
+  // Try Shopify ProductJson — Shopify exposes it inline as JSON-LD or a meta tag
+  const jsonLd = html.match(/<script[^>]+type="application\/ld\+json"[^>]*>([^<]+)<\/script>/i);
+  if (jsonLd) {
+    try {
+      const d = JSON.parse(jsonLd[1]);
+      const offer = Array.isArray(d.offers) ? d.offers[0] : d.offers;
+      return {
+        sku: slug,
+        title: String(d.name || '').replace(/;/g, ',').trim(),
+        price: offer?.price != null ? Number(offer.price) : null,
+        inStock: /InStock/i.test(offer?.availability || ''),
+        url,
+      };
+    } catch { /* fall through */ }
+  }
+  // Fallback: regex
+  const titleMatch = html.match(/<title>([^<]+)<\/title>/i);
+  const priceMatch = html.match(/"price":\s*"?(\d+(?:\.\d+)?)/);
+  const soldOut = /sold\s*out|out\s+of\s+stock/i.test(html);
+  return {
+    sku: slug,
+    title: (titleMatch?.[1] || slug).replace(/\s*-\s*Topps.*$/i, '').replace(/;/g, ',').trim(),
+    price: priceMatch ? Number(priceMatch[1]) : null,
+    inStock: !soldOut,
+    url,
+  };
+}
+
 // ─── Public API ──────────────────────────────────────────────────────────
 
 /**
  * Search products by keyword.
- * @param {'target'|'walmart'} retailer
+ * @param {'target'|'walmart'|'topps'} retailer
  * @param {string} keyword
  * @param {object} opts - { maxResults, minPrice, maxPrice, inStockOnly }
  * @returns {Promise<Array<{sku,title,price,inStock,url}>>}
  */
 async function search(retailer, keyword, opts = {}) {
-  const fn = retailer === 'target' ? targetSearch : retailer === 'walmart' ? walmartSearch : null;
+  const fn = retailer === 'target' ? targetSearch
+    : retailer === 'walmart' ? walmartSearch
+    : retailer === 'topps' ? toppsSearch
+    : null;
   if (!fn) throw new Error(`unsupported retailer: ${retailer}`);
   const all = await fn(keyword, opts);
   return applyFilters(all, opts);
@@ -211,12 +305,20 @@ async function search(retailer, keyword, opts = {}) {
 async function lookup({ retailer, sku, url }) {
   if (url) {
     const parsed = parseUrlForSku(url);
-    if (!parsed) throw new Error(`could not parse SKU from URL`);
-    retailer = parsed.retailer;
-    sku = parsed.sku;
+    if (parsed) {
+      retailer = parsed.retailer;
+      sku = parsed.sku;
+    } else if (/topps\.com\/products\//i.test(url)) {
+      retailer = 'topps';
+      sku = url.match(/topps\.com\/products\/([^/?#]+)/i)?.[1];
+    }
+    if (!retailer || !sku) throw new Error(`could not parse SKU from URL`);
   }
   if (!retailer || !sku) throw new Error('retailer and sku (or url) required');
-  const fn = retailer === 'target' ? targetLookup : retailer === 'walmart' ? walmartLookup : null;
+  const fn = retailer === 'target' ? targetLookup
+    : retailer === 'walmart' ? walmartLookup
+    : retailer === 'topps' ? toppsLookup
+    : null;
   if (!fn) throw new Error(`unsupported retailer: ${retailer}`);
   return fn(sku);
 }

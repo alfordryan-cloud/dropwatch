@@ -17,7 +17,7 @@ const RETAILERS = [
 export default function AdminPanel() {
   // Default to Find SKUs (the primary tool now); fall back if hash points
   // to a removed tab.
-  const validTabs = new Set(['findskus', 'watchlist', 'accounts']);
+  const validTabs = new Set(['findskus', 'watchlist', 'drops', 'accounts']);
   const initialTab = window.location.hash.replace('#', '') || 'findskus';
   const [activeTab, setActiveTab] = useState(validTabs.has(initialTab) ? initialTab : 'findskus');
   const [products, setProducts] = useState([]);
@@ -90,6 +90,7 @@ export default function AdminPanel() {
   const tabs = [
     { id: 'findskus', icon: '🎯', label: 'Find SKUs' },
     { id: 'watchlist', icon: '📋', label: 'Watchlist' },
+    { id: 'drops', icon: '🚀', label: 'Drops' },
     { id: 'accounts', icon: '👤', label: 'Accounts' },
   ];
 
@@ -138,6 +139,7 @@ export default function AdminPanel() {
             {activeTab === 'products' && <ProductsTab products={products} accounts={accounts} onRefresh={refresh} />}
             {activeTab === 'findskus' && <FindSkusTab onRefresh={refresh} />}
             {activeTab === 'watchlist' && <WatchlistTab />}
+            {activeTab === 'drops' && <DropsTab />}
             {activeTab === 'drops' && <DropsTab drops={drops} onRefresh={fetchDrops} products={products} />}
             {activeTab === 'accounts' && <AccountsTab accounts={accounts} onRefresh={refresh} />}
             {activeTab === 'batch' && <BatchImportTab onRefresh={refresh} />}
@@ -735,7 +737,11 @@ function EditProductModal({ product, onClose, onSaved }) {
 // DROPS TAB
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function DropsTab({ drops, onRefresh, products }) {
+// LEGACY — pre-Stellar drops UI that talked to the decommissioned dropwatch
+// engine. Kept for reference only. Replaced by the new DropsTab below that
+// wires watchlist → Stellar deployer JSON config.
+// eslint-disable-next-line no-unused-vars
+function LegacyDropsTab({ drops, onRefresh, products }) {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     retailer: 'best_buy',
@@ -2198,6 +2204,221 @@ function WatchlistTab() {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DropsTab — schedule drops, generate JSON config for stellar-deploy-tasks.js,
+// preview the resulting Stellar tasks before deployment.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const KNOWN_ACCOUNTS = {
+  walmart: ['Cnation Walmart Primary', 'Cnation Walmart Secondary'],
+  target: ['Cnation Target Primary'],
+  topps: [], // Topps not in Stellar; manual purchase via dropwatch monitor.
+};
+
+function DropsTab() {
+  const [items, setItems] = useState([]);
+  const [error, setError] = useState('');
+  const [retailer, setRetailer] = useState('walmart');
+  const [mode, setMode] = useState('normal');
+  const [groupName, setGroupName] = useState('Cnation Walmart Standing-Watch');
+  const [appendToExisting, setAppendToExisting] = useState(true);
+  const [selectedSkus, setSelectedSkus] = useState({});
+  const [selectedAccounts, setSelectedAccounts] = useState(KNOWN_ACCOUNTS.walmart);
+  const [delay, setDelay] = useState(1000);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    getWatchlist().then(r => setItems(r.items || [])).catch(e => setError(e.message));
+  }, []);
+
+  // Reset accounts when retailer changes
+  useEffect(() => {
+    setSelectedAccounts(KNOWN_ACCOUNTS[retailer] || []);
+    setGroupName(retailer === 'walmart' ? 'Cnation Walmart Standing-Watch'
+      : retailer === 'target' ? 'Cnation Target Standing-Watch'
+      : 'Cnation Topps Watch');
+  }, [retailer]);
+
+  const filtered = items.filter(it => it.retailer === retailer && it.is_active);
+
+  const toggleSku = (id) => {
+    setSelectedSkus(prev => {
+      const next = { ...prev };
+      if (next[id]) delete next[id]; else next[id] = { qty: 5, maxPrice: '' };
+      return next;
+    });
+  };
+
+  const updateSkuField = (id, field, value) => {
+    setSelectedSkus(prev => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
+  };
+
+  const toggleAccount = (acct) => {
+    setSelectedAccounts(prev => prev.includes(acct) ? prev.filter(a => a !== acct) : [...prev, acct]);
+  };
+
+  const config = {
+    groupName,
+    appendToExistingGroup: appendToExisting ? groupName : null,
+    retailer,
+    mode,
+    delay: Number(delay) || 1000,
+    skus: filtered
+      .filter(it => selectedSkus[it.id])
+      .map(it => ({
+        sku: it.sku,
+        name: (it.name || it.sku).slice(0, 80),
+        maxPrice: Number(selectedSkus[it.id].maxPrice || it.target_price || 0),
+        qty: Number(selectedSkus[it.id].qty || it.max_quantity || 5),
+      })),
+    accounts: selectedAccounts,
+  };
+
+  const valid = config.skus.length > 0 && config.accounts.length > 0 && config.skus.every(s => s.maxPrice > 0);
+  const taskCount = config.skus.length * (1 + config.accounts.length); // 1 monitor + N normal/fast per SKU
+
+  const configJson = JSON.stringify(config, null, 2);
+  const cliCmd = `cd ~/Documents/dropwatch && node scripts/stellar-deploy-tasks.js /tmp/drop-config.json`;
+  const fullCmd = `cat > /tmp/drop-config.json <<'EOF'\n${configJson}\nEOF\n${cliCmd}`;
+
+  const copy = (txt) => {
+    navigator.clipboard.writeText(txt);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const download = () => {
+    const blob = new Blob([configJson], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `drop-${retailer}-${Date.now()}.json`;
+    a.click();
+  };
+
+  return (
+    <div>
+      <div style={S.sectionHeader}>
+        <div>
+          <h2 style={S.sectionTitle}>Drops</h2>
+          <p style={S.sectionSub}>
+            Schedule a drop. Generates a config that <code>stellar-deploy-tasks.js</code> turns into Monitor + Fast/Normal tasks
+            in Stellar AIO. <strong>Stellar must be quit</strong> before running the deploy command (LevelDB lock).
+          </p>
+        </div>
+      </div>
+
+      {error && (
+        <div style={{ padding: '12px 16px', background: 'rgba(226,75,74,0.1)', color: '#E24B4A', borderRadius: '8px', marginBottom: '16px' }}>{error}</div>
+      )}
+
+      {/* Drop config form */}
+      <div style={S.settingsCard}>
+        <h3 style={S.settingsCardTitle}>Drop config</h3>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px' }}>
+          <div>
+            <label style={S.label}>Retailer</label>
+            <div style={S.chipGroup}>
+              {['walmart', 'target', 'topps'].map(r => (
+                <button key={r} onClick={() => setRetailer(r)} style={{ ...S.chip, ...(retailer === r ? S.chipActive : {}) }}>{r.toUpperCase()}</button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label style={S.label}>Mode (queue drop = normal)</label>
+            <div style={S.chipGroup}>
+              {['normal', 'fast'].map(m => (
+                <button key={m} onClick={() => setMode(m)} style={{ ...S.chip, ...(mode === m ? S.chipActive : {}) }}>{m}</button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label style={S.label}>Delay between actions (ms)</label>
+            <input style={S.input} type="number" value={delay} onChange={e => setDelay(e.target.value)} />
+          </div>
+          <div>
+            <label style={S.label}>Stellar task group name</label>
+            <input style={S.input} value={groupName} onChange={e => setGroupName(e.target.value)} />
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px', color: '#AAA', fontSize: '11px' }}>
+              <input type="checkbox" checked={appendToExisting} onChange={e => setAppendToExisting(e.target.checked)} />
+              Append to existing group (vs. create new)
+            </label>
+          </div>
+        </div>
+      </div>
+
+      {/* SKU selection */}
+      <div style={S.settingsCard}>
+        <h3 style={S.settingsCardTitle}>SKUs from watchlist ({filtered.length} {retailer})</h3>
+        {filtered.length === 0 ? (
+          <p style={{ color: '#666' }}>No active watchlist items for {retailer}. Add some via Find SKUs → Save.</p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {filtered.map(it => {
+              const sel = selectedSkus[it.id];
+              return (
+                <div key={it.id} style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 100px 70px', gap: '12px', alignItems: 'center', padding: '8px', background: sel ? 'rgba(0,210,106,0.05)' : 'transparent', borderRadius: '8px' }}>
+                  <input type="checkbox" checked={!!sel} onChange={() => toggleSku(it.id)} />
+                  <div>
+                    <div style={{ color: '#FFF', fontSize: '13px' }}>{it.name || it.sku}</div>
+                    <div style={{ color: '#666', fontSize: '11px', fontFamily: 'monospace' }}>{it.sku}</div>
+                  </div>
+                  <input style={S.inputSmall} placeholder={`Max $ (${it.target_price ?? '?'})`} value={sel?.maxPrice ?? ''} onChange={e => updateSkuField(it.id, 'maxPrice', e.target.value)} disabled={!sel} />
+                  <input style={S.inputSmall} placeholder="Qty" value={sel?.qty ?? ''} onChange={e => updateSkuField(it.id, 'qty', e.target.value)} disabled={!sel} />
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Account selection */}
+      <div style={S.settingsCard}>
+        <h3 style={S.settingsCardTitle}>Accounts</h3>
+        <div style={S.chipGroup}>
+          {(KNOWN_ACCOUNTS[retailer] || []).map(acct => (
+            <button key={acct} onClick={() => toggleAccount(acct)} style={{ ...S.chip, ...(selectedAccounts.includes(acct) ? S.chipActive : {}) }}>{acct}</button>
+          ))}
+          {(KNOWN_ACCOUNTS[retailer] || []).length === 0 && (
+            <p style={{ color: '#666', fontSize: '12px', margin: 0 }}>{retailer === 'topps' ? 'Topps not supported in Stellar — use dropwatch monitoring + manual purchase.' : 'No accounts configured.'}</p>
+          )}
+        </div>
+      </div>
+
+      {/* Preview + deploy */}
+      {valid && (
+        <div style={S.settingsCard}>
+          <h3 style={S.settingsCardTitle}>Preview ({taskCount} tasks: {config.skus.length} monitors + {config.skus.length * config.accounts.length} {mode})</h3>
+          <pre style={{ background: 'rgba(0,0,0,0.5)', padding: '12px', borderRadius: '8px', color: '#A17CF6', fontSize: '11px', overflow: 'auto', maxHeight: '300px' }}>{configJson}</pre>
+
+          <div style={{ display: 'flex', gap: '10px', marginTop: '14px', flexWrap: 'wrap' }}>
+            <button style={S.btnPrimary} onClick={() => copy(fullCmd)}>{copied ? '✅ Copied!' : '📋 Copy deploy command'}</button>
+            <button style={S.btnSecondary} onClick={download}>💾 Download JSON</button>
+            <button style={S.btnSecondary} onClick={() => copy(configJson)}>Copy JSON only</button>
+          </div>
+
+          <div style={{ marginTop: '16px', padding: '12px', background: 'rgba(239,159,39,0.08)', border: '1px solid rgba(239,159,39,0.2)', borderRadius: '8px', color: '#EF9F27', fontSize: '12px' }}>
+            <strong>To deploy:</strong> Quit Stellar AIO (Cmd+Q), then paste the copied command into Terminal. Tasks will appear in Stellar's <code>{groupName}</code> group when you relaunch.
+          </div>
+
+          {/* Pre-flight checklist reminder */}
+          <details style={{ marginTop: '14px' }}>
+            <summary style={{ cursor: 'pointer', color: '#A17CF6', fontSize: '12px' }}>Pre-flight checklist (review before drop time)</summary>
+            <ul style={{ color: '#AAA', fontSize: '12px', marginTop: '8px', paddingLeft: '20px' }}>
+              <li>Proxy: Stellar uses Bright Data Residential (verified 2026-04-29 as US ASNs: AT&amp;T, Cablevision, CenturyLink). NOT Decodo ISP.</li>
+              <li>Cookies: ≤ 2 hrs old. Run <code>scripts/stellar-patch-cookies.js</code> if older.</li>
+              <li>Fast vs Normal: Walmart queue drops = <strong>normal</strong> mode (Fast Mode loses to queue).</li>
+              <li>Each profile has "One Checkout Per Profile" toggle ON (verified per profile).</li>
+              <li>Start tasks ~2-3 min before drop opens. Do not fire at drop time.</li>
+              <li>Stop the drop if 10+ consecutive 456 errors — proxy is dead.</li>
+            </ul>
+          </details>
         </div>
       )}
     </div>
