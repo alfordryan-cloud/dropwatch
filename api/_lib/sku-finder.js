@@ -97,6 +97,57 @@ async function targetLookup(sku) {
   };
 }
 
+// ─── Best Buy (official Products API) ────────────────────────────────────
+
+// Best Buy gives 3 free API keys per developer account. We use 1 here; can
+// add rotation later if hitting per-key throttles.
+// Docs: https://bestbuyapis.github.io/api-documentation/
+
+async function bbFetchJson(url) {
+  const r = await fetch(url, {
+    headers: { accept: 'application/json', 'user-agent': 'Mozilla/5.0' },
+  });
+  if (!r.ok) throw new Error(`BestBuy API ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  return r.json();
+}
+
+async function bestbuySearch(keyword, opts = {}) {
+  const apiKey = process.env.BESTBUY_API_KEY;
+  if (!apiKey) throw new Error('BESTBUY_API_KEY not set');
+  const limit = opts.maxResults || 25;
+  // (search="...") matches name field; use "&" for AND across multiple words
+  const q = encodeURIComponent(`(search="${keyword}")`);
+  const fields = 'sku,name,salePrice,regularPrice,onlineAvailability,marketplace,preowned,addToCartUrl,url,image,modelNumber';
+  const url = `https://api.bestbuy.com/v1/products${q.replace(/^/,'')}?show=${fields}&pageSize=${limit}&format=json&apiKey=${apiKey}`;
+  const data = await bbFetchJson(url);
+  return (data.products || []).map(p => ({
+    sku: String(p.sku),
+    title: String(p.name || '').replace(/;/g, ',').trim(),
+    price: p.salePrice != null ? Number(p.salePrice) : (p.regularPrice != null ? Number(p.regularPrice) : null),
+    inStock: !!p.onlineAvailability,
+    firstParty: !p.marketplace,            // marketplace=true → 3P seller
+    sellerName: p.marketplace ? 'Marketplace' : 'Best Buy',
+    url: p.url || `https://www.bestbuy.com/site/${p.sku}.p?skuId=${p.sku}`,
+  }));
+}
+
+async function bestbuyLookup(sku) {
+  const apiKey = process.env.BESTBUY_API_KEY;
+  if (!apiKey) throw new Error('BESTBUY_API_KEY not set');
+  const fields = 'sku,name,salePrice,regularPrice,onlineAvailability,marketplace,preowned,url,image';
+  const url = `https://api.bestbuy.com/v1/products(sku=${sku})?show=${fields}&format=json&apiKey=${apiKey}`;
+  const data = await bbFetchJson(url);
+  const p = data.products?.[0];
+  if (!p) return { sku: String(sku), title: '', price: null, inStock: false, url: `https://www.bestbuy.com/site/${sku}.p?skuId=${sku}` };
+  return {
+    sku: String(p.sku),
+    title: String(p.name || '').replace(/;/g, ',').trim(),
+    price: p.salePrice != null ? Number(p.salePrice) : (p.regularPrice != null ? Number(p.regularPrice) : null),
+    inStock: !!p.onlineAvailability,
+    url: p.url || `https://www.bestbuy.com/site/${p.sku}.p?skuId=${p.sku}`,
+  };
+}
+
 // ─── Bright Data Web Unlocker fetch (shared) ──────────────────────────────
 
 async function bdUnlockerFetch(url) {
@@ -293,6 +344,7 @@ async function search(retailer, keyword, opts = {}) {
   const fn = retailer === 'target' ? targetSearch
     : retailer === 'walmart' ? walmartSearch
     : retailer === 'topps' ? toppsSearch
+    : retailer === 'bestbuy' ? bestbuySearch
     : null;
   if (!fn) throw new Error(`unsupported retailer: ${retailer}`);
   const all = await fn(keyword, opts);
@@ -311,6 +363,9 @@ async function lookup({ retailer, sku, url }) {
     } else if (/topps\.com\/products\//i.test(url)) {
       retailer = 'topps';
       sku = url.match(/topps\.com\/products\/([^/?#]+)/i)?.[1];
+    } else if (/bestbuy\.com\/site\//i.test(url)) {
+      retailer = 'bestbuy';
+      sku = url.match(/skuId=(\d+)/i)?.[1] || url.match(/\/(\d{7,})\.p/)?.[1];
     }
     if (!retailer || !sku) throw new Error(`could not parse SKU from URL`);
   }
@@ -318,6 +373,7 @@ async function lookup({ retailer, sku, url }) {
   const fn = retailer === 'target' ? targetLookup
     : retailer === 'walmart' ? walmartLookup
     : retailer === 'topps' ? toppsLookup
+    : retailer === 'bestbuy' ? bestbuyLookup
     : null;
   if (!fn) throw new Error(`unsupported retailer: ${retailer}`);
   return fn(sku);

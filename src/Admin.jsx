@@ -2218,7 +2218,10 @@ function WatchlistTab() {
 const KNOWN_ACCOUNTS = {
   walmart: ['Cnation Walmart Primary', 'Cnation Walmart Secondary'],
   target: ['Cnation Target Primary'],
-  topps: [], // Topps not in Stellar; manual purchase via dropwatch monitor.
+  bestbuy: [], // populate after Stellar Best Buy profiles are created
+  costco: [],  // populate after Stellar Costco profiles are created
+  samsclub: [], // populate after Stellar Sam's Club profiles are created
+  topps: [], // Topps not in Stellar; monitor-only via dropwatch + manual purchase
 };
 
 function DropsTab() {
@@ -2240,9 +2243,15 @@ function DropsTab() {
   // Reset accounts when retailer changes
   useEffect(() => {
     setSelectedAccounts(KNOWN_ACCOUNTS[retailer] || []);
-    setGroupName(retailer === 'walmart' ? 'Cnation Walmart Standing-Watch'
-      : retailer === 'target' ? 'Cnation Target Standing-Watch'
-      : 'Cnation Topps Watch');
+    const groupNames = {
+      walmart: 'Cnation Walmart Standing-Watch',
+      target: 'Cnation Target Standing-Watch',
+      bestbuy: 'Cnation Best Buy Standing-Watch',
+      costco: 'Cnation Costco Standing-Watch',
+      samsclub: 'Cnation Sam\'s Club Standing-Watch',
+      topps: 'Cnation Topps Watch',
+    };
+    setGroupName(groupNames[retailer] || 'Cnation Watch');
   }, [retailer]);
 
   const filtered = items.filter(it => it.retailer === retailer && it.is_active);
@@ -2325,7 +2334,7 @@ function DropsTab() {
           <div>
             <label style={S.label}>Retailer</label>
             <div style={S.chipGroup}>
-              {['walmart', 'target', 'topps'].map(r => (
+              {['walmart', 'target', 'bestbuy', 'costco', 'samsclub', 'topps'].map(r => (
                 <button key={r} onClick={() => setRetailer(r)} style={{ ...S.chip, ...(retailer === r ? S.chipActive : {}) }}>{r.toUpperCase()}</button>
               ))}
             </div>
