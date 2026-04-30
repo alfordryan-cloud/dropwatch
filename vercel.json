@@ -6,6 +6,8 @@
     "api/search-skus.js": { "maxDuration": 300 },
     "api/lookup-sku.js": { "maxDuration": 300 },
     "api/test-bd-topps.js": { "maxDuration": 300 },
-    "api/watchlist.js": { "maxDuration": 30 }
+    "api/watchlist.js": { "maxDuration": 30 },
+    "api/poke-alerts-ingest.js": { "maxDuration": 30 },
+    "api/poke-alerts-webhook.js": { "maxDuration": 30 }
   }
 }
